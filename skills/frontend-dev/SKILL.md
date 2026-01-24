@@ -533,6 +533,356 @@ const observer = new IntersectionObserver(
 
 ---
 
+## React 19 Patterns
+
+### Activity Component vs Conditional Rendering
+
+**Problem:** React 19's `<Activity>` component hides content visually but still mounts children.
+
+**Anti-Pattern:**
+```typescript
+// WRONG - Component still mounts and runs side effects
+<Activity mode={isSearchVisible}>
+  <SearchBar /> {/* Loads 50MB model even when hidden */}
+</Activity>
+```
+
+**Correct Pattern:**
+```typescript
+// CORRECT - Component only mounts when condition is true
+{isSearchVisible && <SearchBar />}
+```
+
+**Key Insight:**
+- `<Activity>` controls visibility, NOT mounting
+- Use for UX state (hiding/showing without unmounting)
+- For performance (preventing resource loads), use true conditionals
+- Heavy components should always use conditional rendering
+
+---
+
+### Lazy Initialization for Heavy Resources
+
+**Problem:** Auto-initializing heavy resources in constructors blocks page load.
+
+**Anti-Pattern:**
+```typescript
+// WRONG - Blocks creation, loads resources immediately
+class HeavyService {
+  constructor() {
+    this.initWorker(); // 50MB model download on any page!
+  }
+}
+```
+
+**Correct Pattern:**
+```typescript
+// CORRECT - Constructor lightweight, init deferred
+class HeavyService {
+  private worker: Worker | null = null;
+  private ready = false;
+
+  constructor() {
+    // Don't initialize here
+  }
+
+  private async ensureWorker() {
+    if (!this.worker) {
+      this.worker = await this.loadHeavyResource();
+      this.ready = true;
+    }
+  }
+
+  async doWork(data: Data) {
+    await this.ensureWorker(); // Lazy trigger on first use
+    // Process data...
+  }
+
+  getReadyState() {
+    return this.ready;
+  }
+}
+```
+
+**Key Insight:** Never auto-initialize heavy resources in constructors. Defer to lazy init on first actual use.
+
+---
+
+### Singleton Factory with Lazy Initialization
+
+```typescript
+let instance: HeavyService | null = null;
+
+export function getHeavyServiceInstance(): HeavyService {
+  if (!instance) {
+    instance = new HeavyService();
+  }
+  return instance;
+}
+```
+
+**Key Insight:** Combined with lazy init in the class, the singleton is created on first request but doesn't load resources until actually needed.
+
+---
+
+## Hook Patterns
+
+### Timer Cleanup with useRef
+
+**Problem:** Memory leaks from uncleaned timers when component unmounts.
+
+**Anti-Pattern:**
+```typescript
+// WRONG - No cleanup, causes memory leak
+useEffect(() => {
+  setTimeout(() => {
+    setState(value); // Crashes if component unmounted
+  }, delay);
+}, []);
+```
+
+**Correct Pattern:**
+```typescript
+// CORRECT - Cleanup with ref storage
+const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+useEffect(() => {
+  timeoutRef.current = setTimeout(() => {
+    setState(value);
+  }, delay);
+
+  return () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+  };
+}, [delay]);
+```
+
+**Key Insight:** Any async operations in hooks must be cleaned up - use useRef for timers, AbortController for fetch calls.
+
+---
+
+### Scroll Reveal Hook Pattern
+
+**Complete implementation for scroll-triggered animations:**
+
+```typescript
+function useScrollReveal(
+  ref: RefObject<HTMLElement>,
+  options?: { threshold?: number; rootMargin?: string; delay?: number }
+) {
+  const [isVisible, setIsVisible] = useState(false);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          if (options?.delay) {
+            timeoutRef.current = setTimeout(() => {
+              setIsVisible(true);
+            }, options.delay);
+          } else {
+            setIsVisible(true);
+          }
+          observer.disconnect(); // Only trigger once
+        }
+      },
+      {
+        threshold: options?.threshold ?? 0.1,
+        rootMargin: options?.rootMargin ?? '0px',
+      }
+    );
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, [ref, options?.threshold, options?.rootMargin, options?.delay]);
+
+  return isVisible;
+}
+```
+
+**Key Insight:** Intersection Observer is hardware-accelerated and doesn't block main thread (unlike scroll event listeners).
+
+---
+
+### Animated Counter with Easing
+
+**Pattern for smooth number animations:**
+
+```typescript
+// Easing functions
+const easeOutQuad = (t: number) => 1 - (1 - t) * (1 - t);
+const easeInOutCubic = (t: number) =>
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+function useCountUp(
+  start: number,
+  end: number,
+  duration: number,
+  easing: (t: number) => number,
+  trigger: boolean
+) {
+  const [value, setValue] = useState(start);
+  const frameRef = useRef<number>();
+
+  useEffect(() => {
+    if (!trigger) return;
+
+    const startTime = performance.now();
+
+    const animate = (currentTime: number) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const easedProgress = easing(progress);
+
+      setValue(start + (end - start) * easedProgress);
+
+      if (progress < 1) {
+        frameRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    frameRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+    };
+  }, [start, end, duration, easing, trigger]);
+
+  return value;
+}
+```
+
+**Usage:**
+```typescript
+const count = useCountUp(0, 2024, 2000, easeOutQuad, isVisible);
+return <span>{Math.floor(count)}</span>;
+```
+
+---
+
+## Testing Patterns
+
+### Jest Browser API Mocks
+
+**Common mocks needed for hooks using browser APIs:**
+
+```typescript
+// jest.setup.ts
+
+// matchMedia mock (for media queries, Intersection Observer)
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: jest.fn().mockImplementation(query => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(),
+  })),
+});
+
+// IntersectionObserver mock
+class MockIntersectionObserver {
+  observe = jest.fn();
+  disconnect = jest.fn();
+  unobserve = jest.fn();
+}
+Object.defineProperty(window, 'IntersectionObserver', {
+  writable: true,
+  value: MockIntersectionObserver,
+});
+
+// ResizeObserver mock
+class MockResizeObserver {
+  observe = jest.fn();
+  disconnect = jest.fn();
+  unobserve = jest.fn();
+}
+Object.defineProperty(window, 'ResizeObserver', {
+  writable: true,
+  value: MockResizeObserver,
+});
+```
+
+**Key Insight:** When adding hooks that depend on browser APIs, immediately add Jest mocks to prevent test failures.
+
+---
+
+## Tailwind Patterns
+
+### Dynamic Class Names Anti-Pattern
+
+**Problem:** Tailwind JIT compiler scans static strings at build time.
+
+**Anti-Pattern:**
+```typescript
+// WRONG - JIT can't detect dynamic classes
+<div className={`duration-${duration}`} /> // Never works!
+```
+
+**Solutions:**
+
+```typescript
+// Option 1: Fixed predefined classes (recommended)
+const durationMap = { fast: 'duration-200', slow: 'duration-500' };
+<div className={durationMap[speed]} />
+
+// Option 2: Inline styles for dynamic values
+<div style={{ transitionDuration: `${duration}ms` }} />
+
+// Option 3: CSS variables with Tailwind base class
+<div
+  className="transition-all"
+  style={{ '--duration': `${duration}ms` } as React.CSSProperties}
+/>
+```
+
+**Key Insight:** Never use template literals to generate Tailwind class names. Use classMap, inline styles, or CSS variables.
+
+---
+
+## Third-Party Libraries (Additional)
+
+### react-icons as MUI Icons Alternative
+
+**Lighter alternative to @mui/icons-material:**
+
+```bash
+npm install react-icons
+```
+
+```typescript
+// Icon sets available: fa (FontAwesome), hi (Heroicons),
+// md (Material), si (Simple Icons), tb (Tabler), fi (Feather)
+import { FaGithub, FaLinkedin } from 'react-icons/fa';
+import { HiSparkles } from 'react-icons/hi';
+import { SiReact, SiTypescript } from 'react-icons/si';
+
+<FaGithub size={24} />
+<SiReact color="#61DAFB" />
+```
+
+**Benefits over MUI Icons:**
+- Much smaller bundle size (tree-shaking per icon)
+- Multiple icon sets in one package
+- Consistent API across all sets
+- No additional dependencies
+
+---
+
 ## Document Maintenance
 
 **When to update this document:**

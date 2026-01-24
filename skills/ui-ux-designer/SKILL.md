@@ -274,6 +274,43 @@ Label each frame clearly and show responsive changes explicitly.
 
 ---
 
+## Animation Timing Standards
+
+### Micro-Interaction Timing
+
+| Animation Type | Duration | Use Case |
+|---------------|----------|----------|
+| Micro-interactions | 150ms | Hover states, toggles, button feedback |
+| Transitions | 200-300ms | Panel slides, fades, reveals |
+| Page animations | 300-500ms | Route transitions, major state changes |
+| Scroll animations | 500-1000ms | Staggered reveals, parallax effects |
+
+**Easing Recommendations:**
+- `ease-in-out` - Smooth, natural feel for most transitions
+- `ease-out` - Quick start, slow end for entering elements
+- `ease-in` - Slow start, quick end for exiting elements
+- `linear` - Only for continuous animations (progress bars, loading)
+
+---
+
+## Responsive Component Patterns
+
+### Component Adaptation Matrix
+
+| Component Type | Mobile | Desktop |
+|---------------|--------|---------|
+| Search | Icon trigger or hidden | Full width in header |
+| Sidebar | Full screen overlay | Persistent slide panel |
+| Filter Bar | Horizontal scroll | Single row, all visible |
+| Stats/Metrics | 2x2 grid | Horizontal row |
+| Cards | Full width, stacked | Grid layout |
+| Navigation | Bottom nav or hamburger | Horizontal menu |
+| Forms | Full width inputs | Side-by-side fields |
+
+**Key Principle:** Don't just shrink desktop layouts - redesign for mobile context and thumb reach.
+
+---
+
 ## Performance Considerations for Designers
 
 ### Canvas vs. CSS Animations
