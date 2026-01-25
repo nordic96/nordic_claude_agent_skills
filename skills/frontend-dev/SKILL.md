@@ -854,6 +854,96 @@ const durationMap = { fast: 'duration-200', slow: 'duration-500' };
 
 ---
 
+### Client-Side Image Ping for Health Checks
+
+**Problem:** Server-side health check APIs create SSRF (Server-Side Request Forgery) vulnerabilities and require careful domain allowlisting.
+
+**Vulnerable Pattern (Avoid):**
+```typescript
+// app/api/health-check/route.ts - DO NOT USE
+// This creates SSRF risk if not properly validated
+export async function GET(req: Request) {
+  const url = req.nextUrl.searchParams.get('url');
+  const response = await fetch(url); // SSRF vulnerability!
+  return Response.json({ status: response.ok ? 'live' : 'offline' });
+}
+```
+
+**Secure Client-Side Pattern:**
+```typescript
+// hooks/useImagePing.ts - Safe alternative
+export function useImagePing(
+  url: string,
+  enabled: boolean = true,
+): ImagePingState {
+  const [state, setState] = useState<ImagePingState>({
+    status: 'unknown',
+    isLoading: enabled,
+  });
+
+  useEffect(() => {
+    if (!enabled || !url) return;
+
+    const img = new Image();
+    const timeoutId = setTimeout(() => {
+      img.src = ''; // Cancel loading
+      setState({ status: 'unknown', isLoading: false });
+    }, 5000);
+
+    img.onload = () => {
+      clearTimeout(timeoutId);
+      setState({ status: 'live', isLoading: false });
+    };
+
+    img.onerror = () => {
+      clearTimeout(timeoutId);
+      setState({ status: 'unknown', isLoading: false });
+    };
+
+    try {
+      const urlObj = new URL(url);
+      img.src = `${urlObj.origin}/favicon.ico`;
+    } catch {
+      setState({ status: 'unknown', isLoading: false });
+    }
+
+    return () => {
+      clearTimeout(timeoutId);
+      img.src = '';
+    };
+  }, [url, enabled]);
+
+  return state;
+}
+```
+
+**How It Works:**
+1. Uses native browser `Image()` element to load favicon
+2. Browser handles CORS checking automatically (fails gracefully)
+3. No server-side code = zero SSRF risk
+4. Timeout ensures hung requests don't block forever
+5. Returns 'live' if favicon loads, 'unknown' if blocked/timeout
+
+**Key Insights:**
+- **Security:** Zero SSRF risk because no server-side fetching
+- **CORS:** Browser blocks cross-origin image loads automatically (safe fallback)
+- **Graceful Degradation:** Returns 'unknown' for blocked resources instead of error
+- **Client-Only:** Eliminates need for domain allowlists or API validation
+- **Performance:** Simple Image() load is faster than HTTP API call
+
+**When to Use:**
+- Website health/status indicators
+- Checking if external sites are reachable
+- Simple connectivity validation (not detailed health data)
+
+**Limitations:**
+- Can't detect detailed HTTP status codes (only success/failure)
+- CORS prevents cross-origin favicon loading (by design)
+- Limited to checking if favicon loads (not actual site responsiveness)
+- No way to distinguish between "offline" and "blocked by CORS"
+
+---
+
 ## Third-Party Libraries (Additional)
 
 ### react-icons as MUI Icons Alternative
