@@ -973,6 +973,113 @@ import { SiReact, SiTypescript } from 'react-icons/si';
 
 ---
 
+## State & Side Effect Patterns
+
+### useEffect State Reset Race Conditions with Cached Events
+
+**Problem:** When resetting component state in useEffect, cached/synchronous events (like `onLoad` from image cache) can fire before or during the state reset, causing timing mismatches.
+
+**Anti-Pattern (Race Condition):**
+```typescript
+useEffect(() => {
+  // Reset state
+  setCurrImg(0);
+  setDisplayImages(newImages);
+  // But onLoad events from cached images might fire BEFORE or DURING this update
+}, [newImages]);
+```
+
+**Why it fails:**
+1. Image cache is synchronous - onLoad can fire immediately after `src` is set
+2. useEffect runs AFTER render completes - cached images load before effect runs
+3. State reset in effect can race with onLoad handler execution
+4. Result: Component shows loading spinner even though images are cached
+
+**Correct Pattern - Key-Based Remounting:**
+```typescript
+// Force component to remount by changing key
+<ImageCarousel key={selectedLocation.id} img={images} />
+
+// Inside component: useState initialization runs BEFORE any events
+function ImageCarousel({ img }: Props) {
+  const [currImg, setCurrImg] = useState(0);  // Runs on mount, before onLoad
+  const [displayImages, setDisplayImages] = useState(img);
+
+  // No useEffect state reset needed - fresh state on remount
+}
+```
+
+**Key Insight:** React's `key` prop forces unmount/remount, which synchronously initializes fresh state via `useState` before any DOM events fire. This is safer than trying to race with async event handlers.
+
+**When to use:**
+- Resetting component state when data/parent changes
+- Components with cached event handlers (images, videos)
+- Preventing race conditions between state updates and side effects
+
+**Alternative (if can't change parent):**
+```typescript
+// Store pending state separately
+const pendingStateRef = useRef({ img: 0 });
+
+useEffect(() => {
+  // Mark state as pending
+  pendingStateRef.current.img = 0;
+}, [img]);
+
+// In onLoad handler
+function handleImageLoad() {
+  if (pendingStateRef.current.img === 0) {
+    setCurrImg(0);
+  }
+}
+```
+
+---
+
+### useTransition - When NOT to Use It
+
+**Problem:** Using `startTransition` for cheap state updates causes timing issues with synchronous events.
+
+**Anti-Pattern:**
+```typescript
+useEffect(() => {
+  startTransition(() => {
+    setCurrImg(0);           // Deferred update
+    setDisplayImages(img);   // Deferred update
+  });
+}, [img]);
+
+// Problem: onLoad events fire BEFORE these deferred updates complete
+// Result: Cached images don't reset their loaded state
+```
+
+**Correct Usage:**
+```typescript
+useEffect(() => {
+  // Only defer the expensive operation
+  setCurrImg(0); // Immediate, cheap update
+
+  startTransition(() => {
+    setLoadedImages(new Set());  // Expensive state tracking
+    setDisplayImages(img);        // Complex state update
+  });
+}, [img]);
+```
+
+**Key Insight:** `useTransition` is for deferring EXPENSIVE operations (large renders, complex state). Don't use it for cheap resets - the timing delay can cause issues with synchronous events like `onLoad`.
+
+**When to use useTransition:**
+- Large array re-renders
+- Complex component tree updates
+- Expensive computations
+
+**When NOT to use:**
+- Simple state resets
+- Index/counter resets
+- Operations that sync with events
+
+---
+
 ## Document Maintenance
 
 **When to update this document:**
