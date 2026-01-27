@@ -1,6 +1,6 @@
 ---
 description: Wrap up the current session - extract learnings, find automation opportunities, update docs, and suggest next steps
-allowed-tools: Read, Glob, Grep, Edit, Task
+allowed-tools: Read, Glob, Grep, Edit, Task, Bash
 ---
 
 # Session Wrap-Up Workflow
@@ -110,6 +110,35 @@ Use the Task tool with `subagent_type: doc-consolidator` to:
 
 The agent will edit files directly to consolidate documentation.
 
+## Phase 4: Commit Global Skills (After Phase 3 completes)
+
+After doc-consolidator finishes, check if any changes were made to the global skills repository and commit them.
+
+### 4. Commit and Push Global Skills
+
+Run the following steps using the Bash tool:
+
+1. **Check for changes** in the global skills repo:
+   ```bash
+   cd ~/projects/nordic_claude_agent_skills && git status --porcelain
+   ```
+
+2. **If changes exist**, commit and push them:
+   ```bash
+   cd ~/projects/nordic_claude_agent_skills && git add -A && git commit -m "docs: update skills from session wrap-up
+
+   Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push
+   ```
+
+3. **Report the result** in the final summary:
+   - If changes were committed: list the files changed
+   - If no changes: note that global skills were unchanged
+
+**Note:** The global `~/.claude/` directory symlinks to `~/projects/nordic_claude_agent_skills/`:
+- `~/.claude/skills/` → `nordic_claude_agent_skills/skills/`
+- `~/.claude/agents/` → `nordic_claude_agent_skills/agents/`
+- `~/.claude/commands/` → `nordic_claude_agent_skills/commands/`
+
 ## Final Summary
 
 After all phases complete, provide a brief summary:
@@ -118,6 +147,7 @@ After all phases complete, provide a brief summary:
 - Documentation updates made
 - Priority items for next session
 - Duplicates found and consolidation actions taken
+- Global skills commit status (committed/no changes)
 
 ---
 
@@ -127,7 +157,7 @@ This workflow has been optimized from the original 6-agent sequential flow:
 
 | Aspect | Before | After |
 |--------|--------|-------|
-| Agents | 6 sequential | 4 (2 parallel + 2 sequential) |
+| Agents | 6 sequential | 4 (2 parallel + 2 sequential) + git commit |
 | Est. Time | ~3-4 min | ~2-2.5 min |
 | File conflicts | Possible | Minimized |
 
@@ -136,3 +166,4 @@ This workflow has been optimized from the original 6-agent sequential flow:
 - Merged duplicate-checker + doc-consolidator (related tasks)
 - Phase 1 runs in parallel for faster execution
 - Added dual-destination routing for global vs project learnings
+- Phase 4 auto-commits global skills changes to nordic_claude_agent_skills repo

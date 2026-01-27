@@ -138,7 +138,7 @@ class UserResponse(UserBase):
     model_config = ConfigDict(from_attributes=True)  # Pydantic v2
 ```
 
-### Validation
+### Field Validation
 
 ```python
 from pydantic import BaseModel, field_validator, EmailStr
@@ -154,6 +154,33 @@ class UserCreate(BaseModel):
             raise ValueError("Password must be at least 8 characters")
         return v
 ```
+
+### Model-Level Validation (Cross-Field Dependencies)
+
+**Problem:** Need to validate one field based on another field's value (e.g., different rules for production vs development).
+
+**Solution:**
+
+```python
+from pydantic import BaseModel, model_validator
+
+class Settings(BaseModel):
+    environment: str  # "production" or "development"
+    api_key: str
+    debug: bool = False
+
+    @model_validator(mode="after")
+    def validate_production_config(self) -> "Settings":
+        """Enforce strict rules in production mode."""
+        if self.environment == "production":
+            if len(self.api_key) < 32:
+                raise ValueError("API key must be at least 32 characters in production")
+            if self.debug:
+                raise ValueError("Debug mode not allowed in production")
+        return self
+```
+
+**Key Insight:** Use `@model_validator(mode="after")` for cross-field validation after individual fields are validated. Use `mode="before"` to validate/transform raw input data before field validation.
 
 ### API Documentation with json_schema_extra
 
@@ -216,6 +243,45 @@ class CompletionRequest(BaseModel):
 **Key Insight:** Use `ge` (greater than or equal), `le` (less than or equal), `min_length`, `max_length`. These are documented in the OpenAPI schema and enforced at validation time.
 
 ## Security Patterns
+
+### Timing-Attack-Safe String Comparison
+
+**Problem:** Using `==` or `!=` to compare API keys/tokens is vulnerable to timing attacks - attackers can infer key characters by measuring response time differences.
+
+**Solution:**
+
+```python
+import secrets
+
+# WRONG - timing attack vulnerability
+if api_key != settings.api_key:
+    raise HTTPException(status_code=401, detail="Invalid API key")
+
+# CORRECT - constant-time comparison
+if not secrets.compare_digest(api_key, settings.api_key):
+    raise HTTPException(status_code=401, detail="Invalid API key")
+```
+
+**Key Insight:** `secrets.compare_digest()` compares strings in constant time, preventing attackers from using timing variations to brute-force keys. Always use for authentication credentials.
+
+### Preventing Sensitive Data in Logs/Repr
+
+**Problem:** Pydantic models with sensitive fields (API keys, passwords) can accidentally get logged via `repr()` or `str()`, exposing secrets.
+
+**Solution:**
+
+```python
+from pydantic import BaseModel, Field
+
+class Settings(BaseModel):
+    api_key: str = Field(..., repr=False)  # Won't appear in repr/logs
+    database_password: str = Field(..., repr=False)
+    app_name: str  # OK to show in logs
+```
+
+**Effect:** When settings object is logged or repr'd, api_key will show as `api_key='***'` instead of the actual value.
+
+**Key Insight:** Use `repr=False` for any field containing secrets, credentials, or PII that should never appear in logs.
 
 ### Password Hashing
 
