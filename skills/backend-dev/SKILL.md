@@ -155,6 +155,66 @@ class UserCreate(BaseModel):
         return v
 ```
 
+### API Documentation with json_schema_extra
+
+**Problem:** Pydantic v2 doesn't auto-generate OpenAPI examples like v1 did.
+
+**Solution:**
+```python
+from pydantic import BaseModel, ConfigDict, Field
+
+class ChatMessage(BaseModel):
+    role: str = Field(description="Message author role")
+    content: str = Field(description="Message text")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"}
+            ]
+        }
+    )
+```
+
+**Key Insight:** Use `json_schema_extra` dict with "example" (singular) or "examples" (plural) key. FastAPI automatically picks this up for OpenAPI schema generation and Swagger UI documentation.
+
+### Literal Types for API Objects
+
+**Problem:** Need to enforce specific string values for API object types (OpenAI compatibility).
+
+**Solution:**
+```python
+from typing import Literal
+from pydantic import BaseModel, Field
+
+class ChatCompletionResponse(BaseModel):
+    object: Literal["chat.completion"] = Field(
+        default="chat.completion",
+        description="Object type identifier"
+    )
+    # This field can only be "chat.completion"
+```
+
+**Key Insight:** `Literal` types are validated by Pydantic and show up correctly in OpenAPI schemas. Always set a `default` for API response fields to ensure consistency.
+
+### Field Constraints for Ranges
+
+**Problem:** Need to validate numeric ranges (temperature, probabilities, token counts).
+
+**Solution:**
+```python
+from pydantic import BaseModel, Field
+
+class CompletionRequest(BaseModel):
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_tokens: int = Field(default=None, ge=1)
+    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+```
+
+**Key Insight:** Use `ge` (greater than or equal), `le` (less than or equal), `min_length`, `max_length`. These are documented in the OpenAPI schema and enforced at validation time.
+
 ## Security Patterns
 
 ### Password Hashing
@@ -359,3 +419,5 @@ settings = Settings()
 5. **Pydantic v1 vs v2**: Use `model_config` not `Config` class in v2
 6. **UTC timestamps**: Always store timestamps in UTC
 7. **Environment variables**: Never hardcode secrets
+8. **json_schema_extra placement**: Goes inside ConfigDict, not as separate class attribute
+9. **default_factory for timestamps**: Use `default_factory=lambda: int(time.time())` for server-generated timestamps
