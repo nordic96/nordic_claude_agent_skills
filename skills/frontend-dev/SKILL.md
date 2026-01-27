@@ -404,6 +404,31 @@ ctx.scale(dpr, dpr);
 
 ## Accessibility Checklist
 
+### Input and Button Labels
+
+**Always add `aria-label` to interactive elements without visible text:**
+
+```tsx
+// Interactive input without visible label
+<input
+  type="text"
+  aria-label="Search chat messages"
+  placeholder="Type here..."
+/>
+
+// Button that might only have an icon
+<button
+  aria-label="Send message"
+  type="submit"
+>
+  <SendIcon />
+</button>
+```
+
+**Why:** Screen reader users need to know what each control does. Placeholder text is not sufficient as it's not always announced.
+
+---
+
 ### Decorative Elements
 
 ```tsx
@@ -626,6 +651,52 @@ export function getHeavyServiceInstance(): HeavyService {
 ---
 
 ## Hook Patterns
+
+### useDebounce - Handling Stale Closure on Delay Changes
+
+**Problem:** When `useDebounce` hook receives a new `delay` prop, the debounce timeout still references the old delay, causing stale behavior.
+
+**Anti-Pattern (Stale Closure):**
+```typescript
+function useDebounce(value: string, delay: number) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);  // Captured delay is now stale!
+
+    return () => clearTimeout(timer);
+  }, [value]); // Missing delay dependency
+}
+```
+
+When `delay` changes, the old timeout still uses the OLD delay value because the effect doesn't re-run.
+
+**Correct Pattern - Update ref when delay changes:**
+```typescript
+function useDebounce(value: string, delay: number) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  const delayRef = useRef(delay);
+
+  // Update ref whenever delay prop changes
+  useEffect(() => {
+    delayRef.current = delay;
+  }, [delay]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delayRef.current);  // Always uses current delay
+
+    return () => clearTimeout(timer);
+  }, [value]); // Refs don't trigger re-renders, can exclude from deps
+}
+```
+
+**Key Insight:** Refs update synchronously without triggering re-renders. Use them to store values that should be accessible in closures without forcing dependency re-runs.
+
+---
 
 ### Timer Cleanup with useRef
 

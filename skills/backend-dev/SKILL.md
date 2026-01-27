@@ -410,14 +410,138 @@ class Settings(BaseSettings):
 settings = Settings()
 ```
 
+## Circular Import Resolution
+
+### Problem: Circular Imports in Route Registration
+
+**Scenario:** Route endpoint files need to import dependencies from `main.py`, but `main.py` imports the routes to register them.
+
+```python
+# main.py
+from src.api.endpoints import chat  # Creates circular import
+
+# endpoints/chat.py
+from src.main import get_inference_client  # Tries to import from main.py
+```
+
+### Solution: Create `deps.py` for Shared Dependencies
+
+Instead of keeping dependencies in `main.py`, create a dedicated `src/deps.py` file:
+
+```python
+# src/deps.py
+from src.services.inference import InferenceClient
+
+def get_inference_client() -> InferenceClient:
+    return InferenceClient()
+```
+
+Then import from `deps.py` in routes and `main.py`:
+
+```python
+# src/main.py
+from src.api.endpoints import chat
+from src.core import settings
+
+# endpoints/chat.py
+from src.deps import get_inference_client
+```
+
+**Key Insight:** Dependency definitions should be in their own module (`deps.py`), separate from app initialization (`main.py`). This breaks the circular dependency chain while maintaining a single source of truth for dependency definitions.
+
+---
+
+## Health Check Patterns for Kubernetes
+
+### Three-Tier Health Check Hierarchy
+
+FastAPI services should implement three health check endpoints for different purposes:
+
+```python
+# GET /api/v1/health/ - Comprehensive health (monitoring/debugging)
+@router.get("/health/", response_model=HealthCheckResponse)
+async def health_check():
+    """Detailed health status with component information."""
+    return {
+        "status": "healthy",
+        "version": settings.app_version,
+        "uptime": app.state.uptime,
+        "components": {
+            "inference": "operational",
+            "cache": "operational"
+        }
+    }
+
+# GET /api/v1/health/live - Liveness probe (container restart decision)
+@router.get("/health/live", response_model=LivenessResponse)
+async def liveness():
+    """Simple alive indicator - container should be restarted if this fails."""
+    return {"alive": True}
+
+# GET /api/v1/health/ready - Readiness probe (load balancer removal)
+@router.get("/health/ready", response_model=ReadinessResponse)
+async def readiness(inference: InferenceClient = Depends(get_inference_client)):
+    """Check if service can accept traffic (remove from LB if false)."""
+    try:
+        await inference.health_check()
+        return {"ready": True}
+    except Exception:
+        return {"ready": False, "message": "Inference service unavailable"}
+```
+
+### Kubernetes Semantics
+
+- **Liveness (`/live`)**: No dependency checks. If this fails, Kubernetes restarts the container.
+- **Readiness (`/ready`)**: Checks dependencies. If false, Kubernetes removes pod from load balancer but doesn't restart.
+- **Comprehensive (`/health/`)**: For human/monitoring tools. Can be verbose with component details.
+
+**Key Insight:** Separate concerns by endpoint. Liveness = container is alive. Readiness = container can serve traffic. Comprehensive = for ops/debugging.
+
+---
+
+## Error Sanitization in Public APIs
+
+### Problem: Exposing Internal Details in Error Messages
+
+Returning detailed error messages to clients reveals system architecture and can aid attackers.
+
+### Solution: Sanitize Public Responses, Log Full Details
+
+```python
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        f"Unhandled exception: {exc}",
+        exc_info=True,  # Logs full traceback internally
+        extra={"path": request.url.path}
+    )
+
+    # Return generic message to client
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"}
+    )
+```
+
+**Key Rules:**
+1. Log full error + traceback internally with `exc_info=True`
+2. Return only generic error messages to clients
+3. Store request context (path, method, user_id) for debugging
+4. For validation errors, return field names but not internals
+
+**Key Insight:** Never trust error details to clients. Log comprehensively server-side, expose minimally to clients.
+
+---
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions
 2. **Session lifecycle**: Don't return database objects after session closes
 3. **N+1 queries**: Use `selectinload`/`joinedload` for relationships
-4. **Circular imports**: Use `TYPE_CHECKING` guard for type hints
+4. **Circular imports**: Use `deps.py` to break import chains (not just `TYPE_CHECKING`)
 5. **Pydantic v1 vs v2**: Use `model_config` not `Config` class in v2
 6. **UTC timestamps**: Always store timestamps in UTC
 7. **Environment variables**: Never hardcode secrets
 8. **json_schema_extra placement**: Goes inside ConfigDict, not as separate class attribute
 9. **default_factory for timestamps**: Use `default_factory=lambda: int(time.time())` for server-generated timestamps
+10. **Error sanitization**: Log full errors internally, return generic messages to clients
