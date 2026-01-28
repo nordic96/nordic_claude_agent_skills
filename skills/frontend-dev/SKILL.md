@@ -1151,6 +1151,148 @@ useEffect(() => {
 
 ---
 
+## Next.js Environment Variables
+
+### NEXT_PUBLIC_ Prefix Required for Client-Side Access
+
+**Problem:** Client-side code cannot access environment variables without the `NEXT_PUBLIC_` prefix.
+
+**Wrong:**
+```typescript
+const API_KEY = process.env.API_KEY; // undefined in browser
+```
+
+**Correct:**
+```typescript
+// .env.local or .env
+NEXT_PUBLIC_API_KEY=your_key_here
+
+// In client code
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY; // Works!
+```
+
+**Key Insight:** During Next.js build, only `NEXT_PUBLIC_*` variables are embedded in the browser bundle. All other variables are server-only. The `NEXT_PUBLIC_` prefix signals to the build system that this variable should be accessible to client code.
+
+---
+
+## React State & Async Timing
+
+### State Updates Are Asynchronous
+
+**Problem:** Using state variable immediately after calling `setState()` returns the old value because state updates are queued.
+
+**Anti-Pattern (Won't work with updated state):**
+```typescript
+function useChat() {
+  const [messages, setMessages] = useState([]);
+
+  async function sendMessage(text: string) {
+    const newMessage = { role: 'user', content: text };
+    setMessages([...messages, newMessage]);
+
+    // messages still contains OLD value!
+    await api.chat(messages); // Bug: API gets old messages
+  }
+}
+```
+
+**Correct Pattern - Use Local Variable:**
+```typescript
+function useChat() {
+  const [messages, setMessages] = useState([]);
+
+  async function sendMessage(text: string) {
+    const newMessage = { role: 'user', content: text };
+    const updatedMessages = [...messages, newMessage];
+
+    // Use local variable for immediate operations
+    await api.chat(updatedMessages);
+
+    // Update state after async operation
+    setMessages(updatedMessages);
+  }
+}
+```
+
+**Key Insight:** React batches state updates. For operations that need the updated state immediately, construct the new state locally and use that value, then pass it to `setState()` separately.
+
+---
+
+
+## SSE Streaming Pattern
+
+### Streaming API Responses with Server-Sent Events
+
+**Problem:** Streaming responses require special handling to parse chunked data correctly.
+
+**Pattern for SSE Streaming:**
+```typescript
+export interface StreamCallbacks {
+  onChunk: (content: string) => void;
+  onError?: (error: Error) => void;
+  onComplete?: () => void;
+}
+
+export async function streamChatCompletion(
+  request: ChatCompletionRequest,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ ...request, stream: true }),
+    signal,
+  });
+
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim() || !line.startsWith('data: ')) continue;
+
+        const data = line.slice(6);
+        if (data === '[DONE]') {
+          callbacks.onComplete?.();
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) {
+            callbacks.onChunk(content);
+          }
+        } catch {
+          // Handle parse errors gracefully
+          callbacks.onError?.(new Error('Failed to parse stream data'));
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+```
+
+**Key Insights:**
+- Buffer partial lines - SSE data can be split across multiple `read()` calls
+- Lines starting with `data: ` are the actual content
+- `[DONE]` signal indicates stream completion
+- Always call `releaseLock()` in finally block
+- Use `onChunk` callback for real-time updates (avoid storing entire response)
+
+---
+
 ## Document Maintenance
 
 **When to update this document:**
