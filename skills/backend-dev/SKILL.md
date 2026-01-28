@@ -599,6 +599,78 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 ---
 
+## Pydantic JSON Serialization
+
+### Omitting None/Null Values
+
+**Problem:** API responses include explicit `null` values for optional fields, making responses verbose and harder to parse.
+
+**Solution:**
+
+```python
+from pydantic import BaseModel
+
+class ChatCompletionChunk(BaseModel):
+    choices: list["ChunkChoice"]
+    model: str
+    finish_reason: str | None = None  # May be None
+
+# Omit null fields from JSON output
+chunk_json = chunk.model_dump_json(exclude_none=True)
+# Output: {"choices": [...], "model": "..."} (no finish_reason if None)
+```
+
+**Key Insight:** Use `exclude_none=True` on `model_dump_json()` to create cleaner API responses that exclude null fields, reducing bandwidth and making parsing more straightforward for clients.
+
+## Python Package Imports
+
+### Relative Imports vs Absolute Imports
+
+**Problem:** Mixing absolute imports (`from api.services import ...`) and relative imports (`from .services import ...`) makes code less maintainable and harder to refactor.
+
+**Solution:**
+
+```python
+# AVOID - absolute imports within same package
+# api/src/services/inference.py
+from api.src.core.exceptions import InferenceException
+
+# PREFER - relative imports within same package
+# api/src/services/inference.py
+from ..core.exceptions import InferenceException
+
+# Absolute imports OK for external packages
+import httpx
+import structlog
+```
+
+**Key Insight:** Use relative imports (`.module`, `..module`) within your package to make code less dependent on the package name. This makes moving/renaming packages easier and more idiomatic Python. Reserve absolute imports for external packages and cross-package imports.
+
+## OpenAI-Compatible Streaming Format
+
+### Server-Sent Events (SSE) Chat Completion Streaming
+
+**Problem:** Implementing streaming chat completions that follow OpenAI's spec for client compatibility.
+
+**Solution:**
+
+```python
+# Initial chunk with model and role
+{"id": "...", "object": "chat.completion.chunk", "choices": [{"delta": {"role": "assistant"}, "index": 0}]}
+
+# Content chunks
+{"id": "...", "object": "chat.completion.chunk", "choices": [{"delta": {"content": "Hello "}, "index": 0}]}
+{"id": "...", "object": "chat.completion.chunk", "choices": [{"delta": {"content": "world"}, "index": 0}]}
+
+# Final chunk with finish_reason
+{"id": "...", "object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}]}
+
+# Terminator
+[DONE]
+```
+
+**Key Insight:** OpenAI format has specific semantics: role only in first chunk, content in delta chunks, finish_reason in final chunk, then `[DONE]` string. Clients expect this exact sequence via SSE (`text/event-stream` with `data: {json}\n\n` format).
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions
