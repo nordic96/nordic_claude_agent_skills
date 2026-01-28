@@ -671,6 +671,148 @@ import structlog
 
 **Key Insight:** OpenAI format has specific semantics: role only in first chunk, content in delta chunks, finish_reason in final chunk, then `[DONE]` string. Clients expect this exact sequence via SSE (`text/event-stream` with `data: {json}\n\n` format).
 
+## Rate Limiting with slowapi
+
+### Full Setup Pattern
+
+**Problem:** Using slowapi for rate limiting but endpoint returns 429 without proper error response.
+
+**Solution:**
+
+```python
+# 1. Initialize limiter in main app setup
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+# 2. Register RateLimitExceeded exception handler
+from slowapi.errors import RateLimitExceeded
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"error": "Rate limit exceeded"},
+    )
+
+# 3. Apply limiter decorator to endpoint
+@router.post("/chat/completions")
+@limiter.limit("60/minute")
+async def create_completion(request: Request, body: ChatCompletionRequest):
+    # Handler receives request parameter automatically from limiter
+    pass
+```
+
+**Key Insight:** Both steps are required: setting `app.state.limiter` AND registering the `RateLimitExceeded` handler. Without both, rate-limited requests will fail ungracefully.
+
+## Error Information Disclosure Prevention
+
+### Problem: Exposing Internal Lists in Error Responses
+
+Some endpoints (like failed chat completions) might want to return details about available options. However, this can expose system architecture to attackers.
+
+### Solution:
+
+```python
+# WRONG - exposes internal list
+try:
+    if model not in available_models:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model. Available: {available_models}"  # Leaks info!
+        )
+except Exception as exc:
+    logger.error(f"Error: {exc}")
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "error": "Internal error",
+            "available_models": available_models  # DEFINITELY leaks info
+        }
+    )
+
+# CORRECT - generic error to client, log details internally
+try:
+    if model not in available_models:
+        logger.error(f"Invalid model: {model}. Available: {available_models}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid model specified"  # No list exposed
+        )
+except Exception as exc:
+    logger.error(f"Chat completion error: {exc}", exc_info=True)
+    raise HTTPException(
+        status_code=500,
+        detail="Internal server error"  # Generic message
+    )
+```
+
+**Key Insight:** Internal details (available models, component list, API keys, database structure) should only appear in server logs, never in client error responses. Always return generic messages to clients.
+
+## OpenAI API Compatibility: Optional Message Content
+
+### Problem: Strict Type Validation Breaks OpenAI Compatibility
+
+OpenAI's chat completion messages can have `content: null` for certain message types (e.g., function calls, tool use). Strict `content: str` validation rejects valid messages.
+
+### Solution:
+
+```python
+from typing import Optional
+from pydantic import BaseModel
+
+class ChatMessage(BaseModel):
+    role: str
+    content: Optional[str] = None  # Nullable per OpenAI spec
+    name: Optional[str] = None
+    tool_call_id: Optional[str] = None
+
+# Valid OpenAI messages:
+# 1. Regular message with content
+{"role": "user", "content": "Hello"}
+
+# 2. Function/tool call without content
+{"role": "assistant", "content": None, "tool_calls": [...]}
+
+# 3. Tool response
+{"role": "tool", "content": "Result", "tool_call_id": "123"}
+```
+
+**Key Insight:** Follow the OpenAI spec exactly for maximum compatibility. Message content is optional (`Optional[str]`) because different message types use different fields. Always validate against actual OpenAI API documentation.
+
+## Type Hint Consistency: Optional vs Union Syntax
+
+### Problem: Inconsistent Type Hint Syntax Across Codebase
+
+Modern Python supports both `Optional[T]` and `T | None`, but mixing them in the same codebase reduces readability.
+
+### Solution:
+
+```python
+from typing import Optional
+
+# PREFER - for Python 3.9 compatibility and consistency
+class ChatMessage(BaseModel):
+    role: str
+    content: Optional[str] = None
+    name: Optional[str] = None
+
+# AVOID - union syntax, less compatible
+class BadExample(BaseModel):
+    role: str
+    content: str | None = None  # Works in 3.10+, inconsistent style
+```
+
+**Key Insight:** Use `Optional[T]` from `typing` module consistently across FastAPI/Pydantic projects. This:
+1. Works on Python 3.9+
+2. Matches common FastAPI examples and documentation
+3. Improves readability when whole codebase uses same style
+4. Pydantic internally converts both forms, but consistent style helps debugging
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions
@@ -683,3 +825,5 @@ import structlog
 8. **json_schema_extra placement**: Goes inside ConfigDict, not as separate class attribute
 9. **default_factory for timestamps**: Use `default_factory=lambda: int(time.time())` for server-generated timestamps
 10. **Error sanitization**: Log full errors internally, return generic messages to clients
+11. **slowapi setup**: Must register BOTH `app.state.limiter` AND `RateLimitExceeded` handler
+12. **Type hints**: Use `Optional[T]` not `T | None` for Python 3.9 compatibility and consistency
