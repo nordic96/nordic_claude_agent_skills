@@ -1560,6 +1560,46 @@ const useModelStore = create<ModelStore>((set, get) => ({
 
 ---
 
+## Git Workflows
+
+### Git Hooks Strategy: Fast vs Thorough Checks
+
+**Problem:** Running expensive operations (like production builds) on every commit slows down development workflow. But we still need safety checks before pushing to remote.
+
+**Solution - Tiered Hook Approach:**
+
+```bash
+# .husky/pre-commit - Run FAST checks
+#!/bin/sh
+npm run lint          # ESLint (< 1 second for small changes)
+# Skip tests here - they're slow and often flaky locally
+
+# .husky/pre-push - Run THOROUGH checks
+#!/bin/sh
+npm run build         # Full production build (catches real issues)
+# Integration tests would go here if available
+```
+
+**Why this works:**
+- **Pre-commit:** Catches style issues immediately, keeps iteration fast
+- **Pre-push:** Catches real build failures before reaching remote, but only when explicitly pushing
+- **Tests:** Run in CI pipeline, not in local hooks (faster feedback, avoids flake)
+
+**Key Insights:**
+- Pre-commit hooks run on every `git commit` - must be fast (< 2 seconds)
+- Pre-push hooks run only on `git push` - can be slower but still important
+- Tests belong in CI, not local hooks (they're too slow and flaky)
+- Production build is the real safety check (catches tree-shaking issues, minification bugs)
+
+**When to use this pattern:**
+- Any project with linting and build steps
+- Teams where developer iteration speed matters
+- Projects with CI/CD pipelines
+
+**Common mistake:** Making pre-commit hooks too slow (running full build) - defeats the purpose of fast iteration. Save expensive checks for pre-push.
+
+---
+
 ## Document Maintenance
 
 **When to update this document:**
