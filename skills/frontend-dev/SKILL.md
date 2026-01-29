@@ -1293,6 +1293,273 @@ export async function streamChatCompletion(
 
 ---
 
+## API Authentication & Security
+
+### Server-Side API Key Injection via Next.js Routes
+
+**Problem:** Exposing API keys via `NEXT_PUBLIC_*` environment variables is a security vulnerability. API keys should never be visible in browser code.
+
+**Anti-Pattern (Insecure):**
+```typescript
+// .env
+NEXT_PUBLIC_API_KEY=secret_key_123
+
+// client-side code
+const apiKey = process.env.NEXT_PUBLIC_API_KEY; // Visible in browser bundle!
+```
+
+**Correct Pattern - Proxy Architecture:**
+```typescript
+// .env.local (server-only, never client-accessible)
+API_KEY=secret_key_123
+
+// utils/networkUtils.ts
+function buildHeaders(options?: ApiFetchOptions): HeadersInit {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  // Only inject for server-side requests
+  if (options?.serverSide) {
+    const apiKey = process.env.API_KEY || ''; // Server-only access
+    if (apiKey) {
+      headers['X-API-Key'] = apiKey;
+    }
+  }
+
+  return { ...headers, ...options?.headers };
+}
+
+// app/api/chat/route.ts (server-side)
+export async function POST(request: NextRequest) {
+  // Browser makes request to /api/chat (no auth needed)
+  // Next.js route adds X-API-Key header using server-side API_KEY
+  const response = await apiFetchStream(`${BACKEND_URL}/api/v1/chat`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+    serverSide: true, // Injects X-API-Key automatically
+  });
+
+  return new Response(response.body, {
+    headers: { 'Content-Type': 'text/event-stream' }
+  });
+}
+```
+
+**Architecture:**
+```
+Browser (no auth needed)
+  ↓
+Next.js API Route (/api/chat) ← Can access API_KEY
+  ↓ (X-API-Key header added here)
+Backend API (requires authentication)
+```
+
+**Key Insights:**
+- API keys never leave the server
+- Client-side code calls Next.js routes (public, no auth)
+- Server-side routes add authentication before calling backend
+- `process.env.API_KEY` is only accessible in Node.js (not bundled to browser)
+- `NEXT_PUBLIC_*` variables are bundled to browser (always exposed)
+
+**When to use this pattern:**
+- Any secret credentials (API keys, tokens, database passwords)
+- Third-party service authentication
+- Security-critical operations (payments, admin actions)
+
+**Never do:**
+- Add any secret to `NEXT_PUBLIC_` prefix
+- Log secrets in client-side code
+- Pass secrets as URL parameters
+
+---
+
+### ApiError Class Pattern
+
+**Problem:** API errors need to preserve HTTP status codes for proper error handling while maintaining clean error interface.
+
+**Pattern:**
+```typescript
+export class ApiError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+// Usage in fetch wrapper
+export async function apiFetch<T>(endpoint: string, options?: ApiFetchOptions): Promise<T> {
+  const res = await fetch(endpoint, { ...options });
+
+  if (!res.ok) {
+    throw new ApiError(res.status, `HTTP Error: status: ${res.status}`);
+  }
+
+  return await res.json();
+}
+
+// Usage in route handlers
+export async function GET() {
+  try {
+    const data = await apiFetch<ModelsResponse>(`${BACKEND_URL}/api/v1/models`, {
+      serverSide: true,
+    });
+    return NextResponse.json(data);
+  } catch (error) {
+    if (error instanceof ApiError) {
+      // Can use statusCode for proper HTTP response
+      return NextResponse.json(
+        { error: 'Failed to fetch models' },
+        { status: error.statusCode >= 500 ? 502 : 500 }
+      );
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+```
+
+**Key Insight:** Separating HTTP status codes from error messages allows both proper logging and appropriate client error handling.
+
+---
+
+### Streaming Responses Through API Proxy
+
+**Problem:** SSE streams from backend must be forwarded correctly through Next.js API routes without buffering the entire response.
+
+**Pattern:**
+```typescript
+// app/api/chat/route.ts
+export async function POST(request: NextRequest) {
+  try {
+    // Use apiFetchStream to get the raw Response
+    const response = await apiFetchStream(`${BACKEND_URL}/api/v1/chat/completions`, {
+      method: 'POST',
+      body: JSON.stringify({ ...request, stream: true }),
+      serverSide: true, // Injects API key
+    });
+
+    // Forward the stream directly (don't buffer!)
+    if (!response.body) {
+      return new Response(JSON.stringify({ error: 'No response body' }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(response.body, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  } catch (error) {
+    console.error('Error in chat completion:', error);
+    return new Response(JSON.stringify({ error: 'Failed to create chat completion' }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+```
+
+**Key Headers:**
+- `Content-Type: text/event-stream` - Signals SSE format to browser
+- `Cache-Control: no-cache` - Prevent caching of stream
+- `Connection: keep-alive` - Keep connection open for streaming
+- `X-Accel-Buffering: no` - For nginx/reverse proxy compatibility
+
+**Key Insight:** Use `Response(response.body)` to forward streams directly without buffering. Always include proper SSE headers.
+
+---
+
+## Zustand Store Patterns
+
+### Preventing Duplicate Fetches
+
+**Problem:** Multiple components mounting simultaneously can trigger multiple API calls for the same data.
+
+**Anti-Pattern:**
+```typescript
+const useModelStore = create<ModelStore>((set) => ({
+  models: [],
+  isLoading: false,
+
+  fetchModels: async () => {
+    set({ isLoading: true });
+    // No check: multiple calls all trigger fetch
+    const models = await api.getModels();
+    set({ models, isLoading: false });
+  },
+}));
+```
+
+**Correct Pattern - Guard with isLoading:**
+```typescript
+const useModelStore = create<ModelStore>((set, get) => ({
+  models: [],
+  selectedModel: null,
+  isLoading: false,
+  error: null,
+
+  fetchModels: async () => {
+    // Guard: if already loading, skip
+    if (get().isLoading) return;
+
+    set({ isLoading: true, error: null });
+
+    try {
+      const models = await fetchModels();
+
+      if (models.length > 0) {
+        set({
+          models,
+          selectedModel: models[0],
+          isLoading: false,
+        });
+      } else {
+        // Fallback to default on empty response
+        set({
+          models: [DEFAULT_MODEL],
+          selectedModel: DEFAULT_MODEL,
+          isLoading: false,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch models:', error);
+      // Fallback on error
+      set({
+        models: [DEFAULT_MODEL],
+        selectedModel: DEFAULT_MODEL,
+        isLoading: false,
+        error: 'Failed to fetch models. Using default model.',
+      });
+    }
+  },
+
+  setSelectedModel: (model: string) => {
+    set({ selectedModel: model });
+  },
+}));
+```
+
+**Key Insights:**
+- Check `get().isLoading` at function start to prevent duplicate requests
+- Provide sensible fallbacks (default model) when fetch fails
+- Reset error state at start of fetch attempt
+- Use selectors to subscribe to specific state: `useModelStore((state) => state.selectedModel)`
+
+**When to use this pattern:**
+- Any resource that multiple components might request simultaneously
+- API calls that are expensive or rate-limited
+- Initialization data that should load once
+
+---
+
 ## Document Maintenance
 
 **When to update this document:**
