@@ -1600,6 +1600,145 @@ npm run build         # Full production build (catches real issues)
 
 ---
 
+## Library Integration Quirks
+
+### react-syntax-highlighter with react-markdown Type Mismatch
+
+**Problem:** When using react-markdown's code component with SyntaxHighlighter, TypeScript throws errors about ref type mismatches. Spreading `{...rest}` from react-markdown fails because the prop types don't align.
+
+**Context:**
+- `react-markdown` passes `Ref<HTMLElement>` to custom components
+- `SyntaxHighlighter` expects `Ref<SyntaxHighlighter>`
+- These ref types are incompatible
+
+**Wrong Approach - Spreading All Props:**
+```typescript
+const CodeComponent = (props: any) => {
+  const { className, children, ...rest } = props;
+  return (
+    <SyntaxHighlighter {...rest}> {/* Type mismatch! */}
+      {children}
+    </SyntaxHighlighter>
+  );
+};
+```
+
+**Correct Solution - Only Pass Compatible Props:**
+```typescript
+const CodeComponent = (props: any) => {
+  const { className, children } = props;
+  const language = className?.replace('language-', '') || 'text';
+
+  return (
+    <SyntaxHighlighter
+      language={language}
+      style={dracula}
+      PreTag="div"
+      CodeTag="code"
+    >
+      {String(children).replace(/\n$/, '')}
+    </SyntaxHighlighter>
+  );
+};
+```
+
+**Key Insight:** Don't spread props directly from react-markdown onto SyntaxHighlighter. Instead, explicitly extract the data you need (`className`, `children`) and pass only the specific props that SyntaxHighlighter understands. This avoids type mismatches and makes the integration more explicit.
+
+---
+
+### Auto-Scroll to Latest Message Pattern
+
+**Problem:** Chat messages should automatically scroll to the latest message as new ones arrive, but the scroll doesn't happen automatically or has timing issues.
+
+**Pattern:**
+```typescript
+// 1. Create ref for scroll target
+const messagesEndRef = useRef<HTMLDivElement>(null);
+
+// 2. Effect watches messages array
+useEffect(() => {
+  // Scroll to bottom when messages change
+  messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+}, [messages]); // Re-run on every new message
+
+// 3. Place sentinel div at end of message list
+return (
+  <div className="messages-container">
+    {messages.map(msg => (
+      <Message key={msg.id} {...msg} />
+    ))}
+    <div ref={messagesEndRef} /> {/* Scroll target */}
+  </div>
+);
+```
+
+**Key Options for scrollIntoView:**
+- `behavior: 'smooth'` - Animated scroll (UX friendly)
+- `behavior: 'auto'` - Instant scroll (if animation causes jank)
+- `block: 'end'` - Align to bottom of viewport (default)
+
+**Why This Works:**
+- React ref updates don't cause re-renders (no infinite loop)
+- Effect runs AFTER each message is rendered
+- Empty sentinel div is lightweight target
+- `scrollIntoView()` is native and performant
+
+**Performance Note:** If scrolling happens during active user typing/selection, consider debouncing or disabling auto-scroll when user manually scrolls up.
+
+---
+
+## Environment Variable Validation Pattern
+
+**Problem:** Environment variables come in as strings, need to be parsed to correct types, and have constraints (ranges, format). Invalid env vars should fallback to safe defaults.
+
+**Pattern:**
+```typescript
+// Example: Temperature parameter (0.0 to 2.0)
+const tempString = process.env.NEXT_PUBLIC_TEMPERATURE || '0.7';
+const tempParsed = parseFloat(tempString);
+
+// Validate: check for NaN, then clamp to valid range
+export const DEFAULT_TEMPERATURE = Number.isNaN(tempParsed)
+  ? 0.7
+  : Math.max(0, Math.min(2.0, tempParsed));
+
+// Example: Model name fallback
+const model = process.env.NEXT_PUBLIC_MODEL || 'gpt-4o-mini';
+export const DEFAULT_MODEL = model.length > 0 ? model : 'gpt-4o-mini';
+
+// Example: Integer with constraints
+const maxTokensString = process.env.NEXT_PUBLIC_MAX_TOKENS || '1024';
+const maxTokens = parseInt(maxTokensString, 10);
+export const DEFAULT_MAX_TOKENS = Number.isNaN(maxTokens)
+  ? 1024
+  : Math.max(1, maxTokens); // Ensure positive
+```
+
+**Key Validation Steps:**
+1. **Provide Default**: `process.env.VAR || 'default'`
+2. **Parse to Type**: `parseFloat()`, `parseInt()`, `JSON.parse()` etc.
+3. **Check for NaN**: `Number.isNaN()` - parser may fail
+4. **Clamp/Validate**: Apply constraints (range, length, format)
+5. **Fallback on Failure**: Use default if validation fails
+
+**Why This Matters:**
+- Type checking at runtime, not just build time
+- Catches typos/missing env vars early
+- Prevents crashes from bad values
+- Makes values predictable and safe to use
+
+**Anti-Pattern (Crashes at Runtime):**
+```typescript
+// WRONG - no validation
+const temp = parseFloat(process.env.NEXT_PUBLIC_TEMPERATURE);
+// If env var is missing: temp = NaN
+// If env var is garbage: temp = NaN
+// If env var is "abc": temp = NaN
+// Later: Math operations with NaN produce unpredictable results
+```
+
+---
+
 ## Document Maintenance
 
 **When to update this document:**
