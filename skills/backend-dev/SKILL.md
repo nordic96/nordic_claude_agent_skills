@@ -813,6 +813,89 @@ class BadExample(BaseModel):
 3. Improves readability when whole codebase uses same style
 4. Pydantic internally converts both forms, but consistent style helps debugging
 
+## Pydantic AI Integration with HuggingFace
+
+### HuggingFace Inference API Endpoints
+
+**Problem:** HuggingFace deprecated the old `api-inference.huggingface.co` endpoint. Code using this endpoint will receive 400 Bad Request errors.
+
+**Solution:**
+
+```python
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+# OLD ENDPOINT (DEPRECATED - returns 400)
+base_url = "https://api-inference.huggingface.co/v1"
+
+# NEW ENDPOINT (CURRENT - works with OpenAI-compatible models)
+base_url = "https://router.huggingface.co/hf-inference/models/{model_id}/v1"
+
+# Create provider with HuggingFace OpenAI-compatible endpoint
+provider = OpenAIProvider(
+    base_url=base_url,
+    api_key=hf_token,
+)
+
+# Use OpenAIChatModel, NOT HuggingFaceModel (which uses deprecated endpoint)
+model = OpenAIChatModel(model_id, provider=provider)
+agent = Agent(model=model, system_prompt="Your prompt here")
+```
+
+**Key Insight:** Use `OpenAIChatModel` + `OpenAIProvider` for HuggingFace models because HF provides an OpenAI-compatible endpoint. The `HuggingFaceModel` provider uses the deprecated endpoint. Always use the `router.huggingface.co/hf-inference` path for current compatibility.
+
+### Pydantic AI Streaming with Message History
+
+**Problem:** Need to handle multi-turn conversations and streaming responses with Pydantic AI while maintaining parameter control (temperature, max_tokens).
+
+**Solution:**
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from pydantic_ai.settings import ModelSettings
+
+# Build message history from OpenAI-format messages
+def build_message_history(messages: list[dict]) -> tuple[str, list[ModelMessage]]:
+    history: list[ModelMessage] = []
+    last_user_message = ""
+
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "") or ""
+
+        if role == "user":
+            last_user_message = content
+            # Add to history as ModelRequest with UserPromptPart
+            history.append(ModelRequest(parts=[UserPromptPart(content=content)]))
+
+    # Exclude last user message (it's the current prompt)
+    return last_user_message, history[:-1] if history else []
+
+# Use model_settings to control LLM parameters
+model_settings = ModelSettings(
+    max_tokens=512,  # Controls output length
+    temperature=0.7,  # Controls randomness
+)
+
+# Stream with message history for multi-turn support
+async with agent.run_stream(
+    user_message,
+    message_history=message_history,
+    model_settings=model_settings,
+) as response:
+    async for chunk in response.stream_text(delta=True):
+        if chunk:
+            # Process text chunk
+            print(chunk, end="")
+```
+
+**Key Insight:**
+- `message_history` parameter enables multi-turn conversations by providing context to the agent
+- `model_settings` controls LLM parameters (max_tokens, temperature) - NOT the `output_type` parameter (which controls structured output)
+- `response.stream_text(delta=True)` returns incremental text chunks, ideal for SSE streaming
+- Message conversion must handle role ("user", "assistant") mapping correctly
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions
