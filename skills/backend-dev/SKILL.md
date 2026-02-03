@@ -829,7 +829,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 base_url = "https://api-inference.huggingface.co/v1"
 
 # NEW ENDPOINT (CURRENT - works with OpenAI-compatible models)
-base_url = "https://router.huggingface.co/hf-inference/models/{model_id}/v1"
+base_url = f"https://router.huggingface.co/hf-inference/models/{model_id}/v1"
 
 # Create provider with HuggingFace OpenAI-compatible endpoint
 provider = OpenAIProvider(
@@ -843,6 +843,8 @@ agent = Agent(model=model, system_prompt="Your prompt here")
 ```
 
 **Key Insight:** Use `OpenAIChatModel` + `OpenAIProvider` for HuggingFace models because HF provides an OpenAI-compatible endpoint. The `HuggingFaceModel` provider uses the deprecated endpoint. Always use the `router.huggingface.co/hf-inference` path for current compatibility.
+
+**Note:** For project-specific HuggingFace configuration patterns, see your project's CLAUDE.md file.
 
 ### Pydantic AI Streaming with Message History
 
@@ -896,6 +898,81 @@ async with agent.run_stream(
 - `response.stream_text(delta=True)` returns incremental text chunks, ideal for SSE streaming
 - Message conversion must handle role ("user", "assistant") mapping correctly
 
+## Pydantic AI Streaming Adapters
+
+### VercelAI Adapter Protocol
+
+**Problem:** Pydantic AI provides `VercelAIAdapter` for streaming responses compatible with Vercel's AI SDK, but the request format and integration quirks are not well documented.
+
+**Solution:**
+
+```python
+from pydantic_ai.ui.vercel_ai import VercelAIAdapter
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+
+app = FastAPI()
+
+@app.post("/api/v1/vercel-chat")
+async def vercel_chat(request: Request):
+    """
+    VercelAI-compatible streaming endpoint.
+
+    Important: Do NOT add Pydantic model validation to this endpoint
+    because FastAPI would consume the request body before VercelAIAdapter
+    can read it, causing "stream consumed" errors.
+    """
+    adapter = VercelAIAdapter(tools=[])
+
+    # VercelAIAdapter.dispatch_request() handles parsing internally
+    async for chunk in adapter.dispatch_request(
+        request=request,
+        model=your_model,
+        system_prompt="Your system prompt"
+    ):
+        yield chunk
+
+    return StreamingResponse(...)
+```
+
+**Key Protocol Details:**
+
+1. **Trigger Field** (CRITICAL): Request must include `trigger` field with specific values:
+   - `trigger: "submit-message"` - New user message
+   - `trigger: "regenerate-message"` - Regenerate last assistant response
+   - **WRONG**: `trigger: "run"` (OpenAI format) - Will fail silently
+
+2. **Body Consumption**: Never add request model validation:
+   ```python
+   # WRONG - FastAPI consumes body, VercelAIAdapter gets empty stream
+   @app.post("/chat")
+   async def chat(request: Request, body: ChatCompletionRequest):
+       adapter.dispatch_request(request, ...)
+
+   # CORRECT - Let VercelAIAdapter handle body parsing
+   @app.post("/chat")
+   async def chat(request: Request):
+       adapter.dispatch_request(request, ...)
+   ```
+
+3. **Message Format**: Compatible with OpenAI format but trigger-based routing:
+   ```json
+   {
+     "trigger": "submit-message",
+     "messages": [
+       {"role": "user", "content": "Hello"},
+       {"role": "assistant", "content": "Hi"}
+     ],
+     "systemPrompt": "Optional override"
+   }
+   ```
+
+**Key Insight:** The VercelAIAdapter is designed for seamless Vercel AI SDK integration but requires careful request handling. The adapter expects full control over request body parsing, so never add FastAPI route validation that consumes the body first. The trigger field routing (submit vs regenerate) is the core difference from OpenAI's API.
+
+**Note:** For project-specific VercelAI endpoint implementation examples, see your project's CLAUDE.md documentation.
+
+---
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions
@@ -910,3 +987,5 @@ async with agent.run_stream(
 10. **Error sanitization**: Log full errors internally, return generic messages to clients
 11. **slowapi setup**: Must register BOTH `app.state.limiter` AND `RateLimitExceeded` handler
 12. **Type hints**: Use `Optional[T]` not `T | None` for Python 3.9 compatibility and consistency
+13. **VercelAIAdapter body consumption**: Never validate request body when using VercelAIAdapter - let it handle parsing
+14. **VercelAI trigger values**: Use `"submit-message"` or `"regenerate-message"`, NOT `"run"`

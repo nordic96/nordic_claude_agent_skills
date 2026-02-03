@@ -1739,6 +1739,83 @@ const temp = parseFloat(process.env.NEXT_PUBLIC_TEMPERATURE);
 
 ---
 
+## AI SDK v6 / @ai-sdk/react v3 Migration
+
+### Breaking Changes in useChat Hook
+
+**Problem:** Upgrading @ai-sdk/react from v2 to v3 breaks all existing chat implementations due to fundamental API redesign.
+
+**Old API (v2):**
+```typescript
+const {
+  input,
+  setInput,
+  handleInputChange,
+  handleSubmit,
+  messages,
+  isLoading,
+} = useChat({ api: '/api/chat' });
+```
+
+**New API (v3+):**
+```typescript
+const {
+  messages,
+  status, // 'submitted' | 'streaming' | 'ready' | 'error'
+  sendMessage,
+  regenerate,
+  stop,
+  setMessages,
+} = useChat({
+  transport: new DefaultChatTransport({ api: '/api/chat' })
+});
+```
+
+**Key Differences:**
+1. **Input State**: No longer provided by hook - you manage your own `useState`
+2. **Loading State**: Changed from `isLoading` to `status` enum with more states
+3. **Sending Messages**: Replace `handleSubmit` with `sendMessage(message)` call
+4. **Transport Pattern**: Explicit transport initialization instead of simple `api` prop
+
+**Migration Pattern:**
+```typescript
+import { useChat, DefaultChatTransport } from '@ai-sdk/react';
+
+export function ChatComponent() {
+  const [input, setInput] = useState('');
+  const { messages, status, sendMessage } = useChat({
+    transport: new DefaultChatTransport({ api: '/api/chat' })
+  });
+
+  const handleSend = () => {
+    sendMessage({ content: input, role: 'user' });
+    setInput('');
+  };
+
+  return (
+    <div>
+      {messages.map(msg => <div key={msg.id}>{msg.content}</div>)}
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+        disabled={status === 'streaming' || status === 'submitted'}
+      />
+    </div>
+  );
+}
+```
+
+**Key Insight:** This is a significant breaking change. The v3 API removes the opinionated input state management in favor of explicit control. This gives more flexibility but requires more boilerplate. Status states are more granular than the binary `isLoading` flag.
+
+**Status Values:**
+- `'ready'` - No operation in progress
+- `'submitted'` - Message has been sent, waiting for response
+- `'streaming'` - Response is streaming in
+- `'error'` - An error occurred
+
+---
+
 ## Document Maintenance
 
 **When to update this document:**
