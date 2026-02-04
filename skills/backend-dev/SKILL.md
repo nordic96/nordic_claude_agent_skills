@@ -973,6 +973,63 @@ async def vercel_chat(request: Request):
 
 ---
 
+## LLM Provider Limitations
+
+### Small/Free LLMs Don't Support Function Calling
+
+**Problem:** When using free-tier or small LLMs (like HuggingFace's free inference API with SmolLM3-3B), OpenAI-style function/tool calling is not supported. The model receives tool definitions but cannot execute them.
+
+**Symptoms:**
+- Model responds with text describing what tool it *would* call
+- Tool calls never execute
+- Response includes tool names/parameters as prose, not structured calls
+
+**Example Response (SmolLM3-3B):**
+```
+I'll use the get_weather tool to check the weather.
+get_weather(location="San Francisco")
+The weather in San Francisco is...
+```
+
+**Solutions:**
+
+1. **Use Models with Tool Support:**
+   ```python
+   # Groq (free tier with tool support)
+   from groq import Groq
+   client = Groq(api_key=os.environ["GROQ_API_KEY"])
+
+   # Models that support tools:
+   # - groq: llama-3.3-70b-versatile, mixtral-8x7b
+   # - openai: gpt-4o, gpt-4o-mini
+   # - anthropic: claude-3-opus, claude-3-sonnet
+   ```
+
+2. **Parse Tool Calls from Text Output:**
+   ```python
+   # For small LLMs that output tools as text
+   import re
+
+   def parse_text_tool_calls(response: str) -> list[dict]:
+       """Extract tool calls from text output when model can't do structured calls."""
+       pattern = r'(\w+)\((.*?)\)'
+       matches = re.findall(pattern, response)
+       return [{"name": name, "args": args} for name, args in matches]
+   ```
+
+3. **Disable Tools for Incompatible Models:**
+   ```python
+   # In pydantic-ai, conditionally register tools
+   if model_supports_tools(settings.model_id):
+       agent = Agent(model=model, tools=[get_weather, search_web])
+   else:
+       agent = Agent(model=model)  # No tools
+   ```
+
+**Key Insight:** Not all LLMs support function calling. Free-tier HuggingFace models (SmolLM, Phi, etc.) typically lack this capability. For production tool use, Groq offers free tier with tool support, or use paid providers (OpenAI, Anthropic). When using incompatible models, either parse tool calls from text or disable tools entirely.
+
+---
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions

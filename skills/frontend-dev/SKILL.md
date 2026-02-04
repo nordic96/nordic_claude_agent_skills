@@ -4,7 +4,7 @@
 
 **Scope:** Tech-agnostic patterns that apply regardless of specific framework or project. For project-specific patterns and session learnings, see the project's `.claude/agents/frontend-dev/SKILL.md`.
 
-**Last Updated:** January 24, 2026
+**Last Updated:** February 4, 2026
 
 ---
 
@@ -1813,6 +1813,93 @@ export function ChatComponent() {
 - `'submitted'` - Message has been sent, waiting for response
 - `'streaming'` - Response is streaming in
 - `'error'` - An error occurred
+
+---
+
+## Zod Validation
+
+### Zod 4 API Changes
+
+**Problem:** Zod 4 deprecated `.passthrough()` method. Code using it will show deprecation warnings or fail.
+
+**Old API (Zod 3):**
+```typescript
+const schema = z.object({
+  name: z.string(),
+}).passthrough(); // Allows extra properties
+```
+
+**New API (Zod 4+):**
+```typescript
+// Option 1: Use .loose() on existing schema
+const schema = z.object({
+  name: z.string(),
+}).loose(); // Replacement for .passthrough()
+
+// Option 2: Use z.looseObject() constructor
+const schema = z.looseObject({
+  name: z.string(),
+}); // Creates object that allows extra properties
+```
+
+**Key Insight:** `.passthrough()` → `.loose()` is a direct replacement. `z.looseObject()` is the new idiomatic way to create objects that allow extra properties. Both preserve unknown properties in the output.
+
+---
+
+## Vercel AI SDK Integration
+
+### streamText Requires Direct LLM Provider Access
+
+**Problem:** Vercel AI SDK's `streamText` function requires direct access to an LLM provider. It cannot work through a proxy API that doesn't expose the underlying provider interface.
+
+**Anti-Pattern (Won't Work):**
+```typescript
+import { streamText } from 'ai';
+
+// WRONG - Custom proxy doesn't expose provider interface
+const result = await streamText({
+  model: customProxyModel('/api/chat'), // Custom wrapper
+  messages,
+});
+```
+
+**Why It Fails:**
+- `streamText` expects a model object with specific provider methods
+- Proxy APIs only expose HTTP endpoints, not the provider interface
+- The AI SDK needs to control streaming, tool calls, etc. directly
+
+**Correct Patterns:**
+
+```typescript
+// Option 1: Use official provider (Groq, OpenAI, etc.)
+import { streamText } from 'ai';
+import { groq } from '@ai-sdk/groq';
+
+const result = await streamText({
+  model: groq('llama-3.3-70b-versatile'),
+  messages,
+});
+
+// Option 2: Use useChat hook with custom API route
+import { useChat } from '@ai-sdk/react';
+
+const { messages, sendMessage } = useChat({
+  api: '/api/chat', // Your FastAPI backend
+});
+
+// Option 3: Manual SSE streaming from backend
+async function streamFromBackend(messages: Message[]) {
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ messages, stream: true }),
+  });
+
+  const reader = response.body?.getReader();
+  // Process SSE stream manually
+}
+```
+
+**Key Insight:** Vercel AI SDK's `streamText` is designed for direct provider integration. For custom backends (FastAPI, etc.), either use `useChat` hook which handles streaming, or implement manual SSE processing. The SDK's provider abstraction doesn't work with arbitrary HTTP endpoints.
 
 ---
 
