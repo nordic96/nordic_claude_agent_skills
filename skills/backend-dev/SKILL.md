@@ -813,38 +813,43 @@ class BadExample(BaseModel):
 3. Improves readability when whole codebase uses same style
 4. Pydantic internally converts both forms, but consistent style helps debugging
 
-## Pydantic AI Integration with HuggingFace
+## Pydantic AI Integration with LLM Providers
 
-### HuggingFace Inference API Endpoints
+### Provider-Specific Endpoint Configuration
 
-**Problem:** HuggingFace deprecated the old `api-inference.huggingface.co` endpoint. Code using this endpoint will receive 400 Bad Request errors.
+**Problem:** Different LLM providers have different endpoint formats and authentication patterns.
 
-**Solution:**
+**Key Patterns:**
 
 ```python
+from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-# OLD ENDPOINT (DEPRECATED - returns 400)
-base_url = "https://api-inference.huggingface.co/v1"
+# OpenAI (official)
+from pydantic_ai.models.openai import OpenAIModel
+agent = Agent(model=OpenAIModel("gpt-4o-mini"))
 
-# NEW ENDPOINT (CURRENT - works with OpenAI-compatible models)
-base_url = f"https://router.huggingface.co/hf-inference/models/{model_id}/v1"
+# Anthropic (official)
+from pydantic_ai.models.anthropic import AnthropicModel
+agent = Agent(model=AnthropicModel("claude-3-sonnet"))
 
-# Create provider with HuggingFace OpenAI-compatible endpoint
+# Groq (official provider)
+from pydantic_ai.models.groq import GroqModel
+agent = Agent(model=GroqModel("llama-3.3-70b-versatile"))
+
+# Custom OpenAI-compatible endpoint (e.g., HuggingFace)
 provider = OpenAIProvider(
-    base_url=base_url,
-    api_key=hf_token,
+    base_url="https://custom-endpoint/v1",
+    api_key="your_token",
 )
-
-# Use OpenAIChatModel, NOT HuggingFaceModel (which uses deprecated endpoint)
-model = OpenAIChatModel(model_id, provider=provider)
-agent = Agent(model=model, system_prompt="Your prompt here")
+model = OpenAIChatModel("model-id", provider=provider)
+agent = Agent(model=model)
 ```
 
-**Key Insight:** Use `OpenAIChatModel` + `OpenAIProvider` for HuggingFace models because HF provides an OpenAI-compatible endpoint. The `HuggingFaceModel` provider uses the deprecated endpoint. Always use the `router.huggingface.co/hf-inference` path for current compatibility.
+**Key Insight:** Use official provider models when available (GroqModel, OpenAIModel, etc.). For custom endpoints, use `OpenAIChatModel` + `OpenAIProvider` pattern.
 
-**Note:** For project-specific HuggingFace configuration patterns, see your project's CLAUDE.md file.
+**Note:** For project-specific provider configuration, see your project's CLAUDE.md file.
 
 ### Pydantic AI Streaming with Message History
 
@@ -1030,6 +1035,92 @@ The weather in San Francisco is...
 
 ---
 
+## Pydantic-AI Tool Support with LLM Providers
+
+### VercelAIAdapter and Function Calling
+
+**Key Insight:** `VercelAIAdapter.dispatch_request()` fully supports function calling and tool execution when the underlying LLM supports it. The adapter automatically handles tool execution.
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.ui.vercel_ai import VercelAIAdapter
+
+# Agent with tools
+agent = Agent(
+    model=your_model,
+    tools=[web_search, calculate, custom_tool],
+)
+
+# VercelAIAdapter handles tool execution automatically
+@app.post("/chat")
+async def chat(request: Request):
+    return await VercelAIAdapter.dispatch_request(request, agent=agent)
+```
+
+### Built-in Tools vs Common Tools
+
+**Problem:** Distinction between provider-specific built-in tools and universal common tools isn't always clear.
+
+**Solution:**
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
+
+# built-in tools (provider-specific, mainly OpenAI/Anthropic)
+agent = Agent(model=OpenAIModel(...), builtin_tools=["web_search"])
+
+# Common tools (work with any provider that supports function calling)
+agent = Agent(
+    model=your_model,
+    tools=[
+        duckduckgo_search_tool(max_results=10),
+        calculate,
+        get_current_time,
+    ]
+)
+```
+
+**Key Insight:** `builtin_tools` are provider-specific (mainly OpenAI/Anthropic). For universal tool support, use `tools=[]` parameter with common tools from `pydantic_ai.common_tools` or custom tools.
+
+### stream_text() vs stream_responses() for Tool Support
+
+**Problem:** When streaming from a pydantic-ai agent that uses tools, `response.stream_text()` ignores tool results. Need to handle both text and tool execution results.
+
+**Solution:**
+
+```python
+from pydantic_ai import Agent, ModelResponse
+
+agent = Agent(model=GroqModel(...), tools=[search_tool, calculate])
+
+# For Vercel AI SDK endpoints (tools included automatically)
+@app.post("/vercel-chat")
+async def vercel_chat(request: Request, agent: Agent = Depends(get_agent)):
+    return await VercelAIAdapter.dispatch_request(request, agent=agent)
+    # VercelAIAdapter handles tools internally
+
+# For OpenAI-compatible endpoints, handle tools explicitly
+async def stream_chat_with_tools(agent: Agent, messages: list[dict]):
+    async with agent.run_stream(user_message, message_history=history) as response:
+        # stream_text() ignores tool results
+        # async for text in response.stream_text(delta=True):
+        #     yield text  # Won't include tool execution
+
+        # stream_responses() yields ModelResponse objects containing tools
+        async for model_response in response.stream_responses():
+            # model_response contains:
+            # - text from model output
+            # - tool calls with results
+            for chunk in model_response.parts:
+                # Process text parts, tool calls, etc.
+                pass
+```
+
+**Key Insight:** `stream_text(delta=True)` is text-only for simple completions. For agents with tools, you need `stream_responses()` which yields `ModelResponse` objects containing the full structured response including tool calls and results. This is crucial when implementing OpenAI-compatible streaming with function calling support.
+
+---
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions
@@ -1046,3 +1137,4 @@ The weather in San Francisco is...
 12. **Type hints**: Use `Optional[T]` not `T | None` for Python 3.9 compatibility and consistency
 13. **VercelAIAdapter body consumption**: Never validate request body when using VercelAIAdapter - let it handle parsing
 14. **VercelAI trigger values**: Use `"submit-message"` or `"regenerate-message"`, NOT `"run"`
+15. **VercelAIAdapter and tools**: VercelAIAdapter DOES support function calling - the adapter handles tool execution automatically
