@@ -1121,6 +1121,220 @@ async def stream_chat_with_tools(agent: Agent, messages: list[dict]):
 
 ---
 
+## Docker & Containerization
+
+### Container Runtime Dependencies Not Inherited from Local
+
+**Problem:** A dependency (like `uvicorn`) works locally but fails in Docker with "executable file not found in $PATH".
+
+**Root Cause:** Packages manually installed locally via pip don't automatically exist in Docker containers. The container's filesystem is isolated - it only includes files specified in the Dockerfile and dependencies listed in dependency declaration files (pyproject.toml, requirements.txt, etc.).
+
+**Wrong Approach:**
+```bash
+# Local: pip install uvicorn
+# Runtime works locally...
+
+# But Dockerfile:
+FROM python:3.11
+WORKDIR /app
+COPY . .
+# RUN command fails: uvicorn: command not found
+# Because uvicorn wasn't listed in pyproject.toml
+```
+
+**Correct Pattern:**
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",  # MUST be listed!
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
+```
+
+```bash
+# Dockerfile
+FROM python:3.11
+WORKDIR /app
+COPY pyproject.toml .
+RUN pip install -e .  # Installs all dependencies from pyproject.toml
+COPY . .
+CMD ["uvicorn", "src.main:app"]  # Now uvicorn is available
+```
+
+**Key Insight:** Every runtime dependency must be declared in your project's dependency file. Docker containers are clean slates - they don't inherit your local environment. Always verify that all imports and CLI tools have corresponding entries in pyproject.toml (Python) or package.json (Node).
+
+**Prevention:** When a dependency works locally but fails in Docker, check pyproject.toml/requirements.txt/package.json for the missing entry. Any package you `import` or execute must be listed.
+
+---
+
+### Docker Compose Service-to-Service Networking
+
+**Problem:** Frontend container cannot reach backend at `http://0.0.0.0:8000`. Backend container cannot be reached by frontend at `localhost:8000`.
+
+**Root Cause Misunderstandings:**
+1. `0.0.0.0` is "all interfaces on THIS container" - it's not accessible from other containers
+2. `localhost` and `127.0.0.1` in one container refer to that container's own loopback, not the host or other containers
+
+**Wrong Approach:**
+```env
+# .env.docker for frontend container
+API_BASE_URL=http://0.0.0.0:8000  # Wrong: 0.0.0.0 is this container's loopback
+# or
+API_BASE_URL=http://localhost:8000  # Wrong: localhost in container ≠ host
+```
+
+**Docker Compose Networking Flow:**
+```
+Frontend Container (web)
+  ↓
+Docker Compose DNS (automatic)
+  ↓
+Service name "server" resolves to backend container's IP
+```
+
+**Correct Pattern:**
+```yaml
+# docker-compose.yml
+services:
+  web:
+    build:
+      context: ./web
+    environment:
+      - API_BASE_URL=http://server:8000  # ← Use service name!
+
+  server:
+    build:
+      context: ./server
+    ports:
+      - "8000:8000"
+```
+
+```env
+# web/.env.docker
+API_BASE_URL=http://server:8000  # Service name resolves via Docker DNS
+```
+
+**Key Insight:** Docker Compose provides automatic DNS resolution for service names. Containers communicate using the service name (defined in docker-compose.yml) as the hostname. Never use `0.0.0.0`, `localhost`, or IP addresses when one service needs to reach another - use the service name. The only exception is `localhost:PORT` when accessing your own container's ports from within that container.
+
+**Service Name Resolution:**
+- `web` service reaching `server` → use `http://server:8000`
+- `server` service listening → use `0.0.0.0:8000` (listen on all interfaces)
+- Frontend browser accessing `web` → use `http://localhost:3000` (on host machine)
+
+---
+
+### Docker Compose Configuration: Path Verification
+
+**Problem:** Docker build fails with "build context does not exist" or builds the wrong directory.
+
+**Mistake Example:**
+```yaml
+# WRONG in docker-compose.yml
+services:
+  server:
+    build:
+      context: ./api  # ← Directory doesn't exist (should be ./server)
+```
+
+**Correct Pattern:**
+```yaml
+services:
+  server:
+    build:
+      context: ./server  # ← Must match actual directory name
+      dockerfile: Dockerfile
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+```
+
+**Key Insight:** The `context` path in docker-compose.yml must exactly match the directory structure. Verify directory names match before running `docker-compose up`. Use `ls -la` to confirm paths.
+
+---
+
+## CORS and Server-Side Requests
+
+### CORS Only Applies to Browser-Originated Requests
+
+**Problem:** Adding CORS headers to backend seems necessary, but server-side requests from Next.js route handlers to other containers don't trigger CORS.
+
+**Root Cause:** CORS (Cross-Origin Resource Sharing) is a browser security feature. It only applies when:
+1. A browser makes an HTTP request
+2. The request origin (scheme + host + port) differs from the target
+3. The browser enforces CORS policy
+
+**Server-side requests bypass CORS entirely** because they don't come through the browser's security model.
+
+**Architecture:**
+```
+Browser (CORS checking enabled)
+  ↓ (triggers CORS check)
+Next.js API Route (no CORS check - server-side)
+  ↓ (no CORS check - internal network)
+FastAPI Backend (no CORS needed for internal requests)
+```
+
+**Correct Pattern:**
+
+```python
+# FastAPI server - CORS needed for browser requests
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # For browser requests
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+```typescript
+// Next.js route handler - CAN access backend without CORS
+// app/api/chat/route.ts
+export async function POST(request: NextRequest) {
+  // This is server-side code - no CORS restrictions
+  const response = await fetch("http://server:8000/api/v1/chat", {
+    method: "POST",
+    body: JSON.stringify(request),
+    // No special headers needed, CORS doesn't apply here
+  });
+
+  return response;
+}
+```
+
+```typescript
+// Browser code - CORS IS checked
+// This would trigger CORS error if backend doesn't allow
+const response = await fetch("http://backend:8000/api/v1/chat", {
+  method: "POST",
+  body: JSON.stringify(data),
+  // Browser checks: is response origin allowed?
+});
+```
+
+**Key Insight:**
+- Browser → API: CORS is enforced by browser
+- Server → API: CORS doesn't apply (no browser involved)
+- Internal service-to-service communication: CORS not needed
+
+**When to add CORS headers:**
+- When browsers will make direct requests to your API
+- In public APIs meant for web consumption
+
+**When CORS headers are unnecessary:**
+- Internal service-to-service communication in Docker/Kubernetes
+- All requests proxied through Next.js or another backend layer
+- Mobile app requests (CORS is browser-only)
+
+---
+
 ## Common Gotchas
 
 1. **Forgetting `await`**: Always await async functions
@@ -1138,3 +1352,6 @@ async def stream_chat_with_tools(agent: Agent, messages: list[dict]):
 13. **VercelAIAdapter body consumption**: Never validate request body when using VercelAIAdapter - let it handle parsing
 14. **VercelAI trigger values**: Use `"submit-message"` or `"regenerate-message"`, NOT `"run"`
 15. **VercelAIAdapter and tools**: VercelAIAdapter DOES support function calling - the adapter handles tool execution automatically
+16. **Container dependencies not in pyproject.toml**: All runtime CLI tools and imports must be in dependency declarations
+17. **Docker Compose service networking**: Use service names (not localhost/0.0.0.0) for inter-container communication
+18. **docker-compose.yml context paths**: Must exactly match actual directory structure
