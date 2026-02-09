@@ -155,6 +155,41 @@ Add learnings WITH session dates:
   - **Complexity:** Low/Medium/High
 ```
 
+## Session Archive Rule
+
+Before appending new session learnings to a project SKILL.md file:
+
+1. **Count existing sessions:** Search for `## Session Learnings -` headings in the target file
+2. **If 3+ sessions exist:** Move the **oldest** session section to `SKILL_ARCHIVE.md` in the same directory
+   - Create `SKILL_ARCHIVE.md` if it doesn't exist, with a header: `# Archived Session Learnings`
+   - Append the moved section to the archive file
+   - Remove it from the active SKILL.md
+3. **Keep only 3 most recent** session sections in SKILL.md at all times
+4. **Add/update archive reference** at the top of SKILL.md (after the first heading):
+   ```markdown
+   > Older sessions archived in [SKILL_ARCHIVE.md](./SKILL_ARCHIVE.md)
+   ```
+
+This prevents unbounded growth of SKILL.md files across sessions.
+
+## De-duplication Rules
+
+Before writing any learning to a target file:
+
+1. **Read the target file first** — scan for existing content on the same topic
+2. **Check for semantic duplicates** — same concept described with different wording
+3. **If a duplicate exists and is more complete:** Skip the new entry entirely
+4. **If the new entry adds value to an existing one:** Merge into the existing entry instead of creating a duplicate
+5. **Never create two entries about the same pattern** — consolidate into one
+
+## Reference Style Rules
+
+When writing or editing documentation:
+
+1. **NEVER use `(lines X-Y)` references** — these break on every edit
+2. **USE section heading references:** `(see "Reusable Styles System" section in CLAUDE.md)`
+3. **Migrate any existing line-number references** encountered during editing — replace with section heading references
+
 ## Guidelines
 
 - Be concise but specific

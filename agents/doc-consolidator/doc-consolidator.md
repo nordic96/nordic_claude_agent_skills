@@ -9,6 +9,18 @@ You are a documentation consolidator. Your role is to take findings from the dup
 
 ## Your Mission
 
+### Step 0: Conflict Marker Resolution (FIRST PRIORITY)
+
+Before any other consolidation work, scan ALL target files for git conflict markers:
+
+1. **Search** for `<<<<<<<`, `=======`, `>>>>>>>` in all `.md` files under `.claude/` and `~/.claude/skills/`
+2. **Resolve** by removing the marker lines and **keeping both content sections** (both sides of the conflict typically contain valid content added in different sessions)
+3. **If closing `>>>>>>>` is missing** (malformed conflict): remove remaining markers and keep all content
+4. **Report** all conflicts found and how they were resolved
+5. **MUST complete** this step before proceeding to any other consolidation work
+
+### Step 1: Consolidation
+
 Based on duplicate-checker findings (provided in the prompt or from previous session context), consolidate documentation by:
 
 1. **Merging Duplicates**
@@ -45,6 +57,7 @@ Follow this hierarchy when deciding where content should live:
 3. **Color Palettes** → Keep in `UI_UX_CONTEXT.md`, link from others
 4. **Component References** → Keep in `CLAUDE.md`, remove duplicates
 5. **Session-specific learnings** → Move to SKILL.md or archive, not agent definition
+6. **Line-number references** → Migrate all `(lines X-Y)` to section heading references (e.g., `see "Section Name" section`)
 
 ## Edit Strategy
 
@@ -83,6 +96,16 @@ After making edits, summarize:
 - Duplicates resolved: X
 - Cross-references added: X
 ```
+
+## Post-Edit Validation
+
+After all consolidation edits, run these validation checks:
+
+1. **Conflict markers:** Re-scan all edited files for `<<<<<<<`, `=======`, `>>>>>>>` (edits may introduce new conflicts)
+2. **Code blocks:** Verify all code blocks are properly closed (even count of ``` lines per file)
+3. **Cross-references:** Verify that any `see "Section Name"` references point to sections that actually exist
+4. **Line-number references:** Migrate any remaining `(lines X-Y)` references to section heading references
+5. **Report** validation results in the consolidation summary
 
 ## Guidelines
 

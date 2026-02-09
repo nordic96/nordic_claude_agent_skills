@@ -1,7 +1,7 @@
 ---
 name: followup-suggestor
 description: Identifies incomplete work, technical debt, and testing gaps for next session prioritization.
-tools: Read, Glob, Grep
+tools: Read, Glob, Grep, Edit
 model: haiku
 ---
 
@@ -37,35 +37,47 @@ Review the current conversation to identify:
 
 ## Output Format
 
-Print your findings directly to the console (do not write to any files).
+Write your findings to `.claude/session-state/followups.md` AND print them to the console.
+
+**File persistence rules:**
+- Create `.claude/session-state/` directory if it doesn't exist
+- **Overwrite** (not append) `followups.md` — only the latest session's followups are stored
+- Add a `Last updated: [date]` header to the file
 
 Format as:
 
-```
-## Follow-up Items for Next Session
+```markdown
+# Follow-up Items for Next Session
 
-### Priority 1 - Must Complete
-1. [Item] - [Brief reason why critical]
-2. [Item] - [Brief reason why critical]
+> Last updated: [YYYY-MM-DD]
 
-### Priority 2 - Should Complete
-1. [Item] - [Impact if delayed]
-2. [Item] - [Impact if delayed]
+## Priority 1 - Must Complete
+1. [Item] - [Brief reason why critical] `[simple|medium|complex]`
+2. [Item] - [Brief reason why critical] `[simple|medium|complex]`
 
-### Priority 3 - Nice to Have
-1. [Item] - [Benefit]
-2. [Item] - [Benefit]
+## Priority 2 - Should Complete
+1. [Item] - [Impact if delayed] `[simple|medium|complex]`
+2. [Item] - [Impact if delayed] `[simple|medium|complex]`
 
-### Blocked Items
+## Priority 3 - Nice to Have
+1. [Item] - [Benefit] `[simple|medium|complex]`
+2. [Item] - [Benefit] `[simple|medium|complex]`
+
+## Blocked Items
 - [Item] - Waiting on: [dependency]
 
-### Technical Debt
-- [Item] - [Location/file if known]
+## Technical Debt
+- [Item] - [Location/file if known] `[simple|medium|complex]`
 
-### Testing Needed
+## Testing Needed
 - [ ] [Test description]
 - [ ] [Test description]
 ```
+
+**Complexity estimates:**
+- `simple` — Single file, < 30 min, no architectural impact
+- `medium` — Multiple files, 30 min–2 hrs, limited scope
+- `complex` — Cross-cutting concern, 2+ hrs, architectural decisions needed
 
 ## Prioritization Criteria
 
@@ -93,4 +105,32 @@ Format as:
 - Include file paths when known
 - Estimate complexity (simple/medium/complex)
 - Note dependencies between items
-- This output is temporary - don't persist to files
+- Persist to `.claude/session-state/followups.md` AND print to console
+
+## Automation Opportunity Triage
+
+After generating followups, perform automation triage:
+
+1. **Read history:** Check if `.claude/session-state/automation-log.md` exists
+2. **Extract candidates:** Identify automation opportunities from the current session (repetitive tasks, manual processes, potential slash commands)
+3. **Compare with history:** If the log exists, check each current candidate against previous entries
+4. **Flag recurring items:** Mark any opportunity that has appeared in 3+ sessions as `RECURRING`
+5. **Append to log:** Add current session's opportunities to `automation-log.md` with the date
+
+**Automation log format (append, not overwrite):**
+
+```markdown
+## Session - [YYYY-MM-DD]
+
+- [Opportunity description] — Occurrences: [N] [RECURRING if 3+]
+- [Opportunity description] — Occurrences: [N]
+```
+
+6. **Print triage summary** to console after the followup items:
+
+```
+### Automation Triage
+- New opportunities: [N]
+- Recurring (3+ sessions): [list]
+- Total tracked: [N]
+```

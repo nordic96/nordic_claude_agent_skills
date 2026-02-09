@@ -5,7 +5,36 @@ allowed-tools: Read, Glob, Grep, Edit, Task, Bash
 
 # Session Wrap-Up Workflow
 
-You are coordinating a session wrap-up workflow. Execute the following phases:
+You are coordinating a session wrap-up workflow. Execute the following phases in order:
+
+## Phase 0: Pre-flight Validation
+
+Before any agents run, perform these checks using Bash/Grep tools directly:
+
+### 0a. Conflict Marker Scan
+
+Scan for git conflict markers in all documentation files:
+
+```bash
+grep -rn '<<<<<<\|======\|>>>>>>' .claude/ ~/.claude/skills/ --include='*.md' || echo "No conflicts found"
+```
+
+**If conflicts are found:**
+- Resolve by removing marker lines (`<<<<<<<`, `=======`, `>>>>>>>`), keeping both content sections
+- If ambiguous (contradictory content on each side): ask the user which to keep
+- **Block Phase 1** until all conflicts are resolved
+
+### 0b. Baseline File Sizes
+
+Record file sizes for delta reporting in the final summary:
+
+```bash
+wc -l .claude/CLAUDE.md .claude/agents/*/SKILL.md ~/.claude/skills/*/SKILL.md 2>/dev/null
+```
+
+Save these numbers for comparison in the final summary.
+
+---
 
 ## Phase 1: Analysis (Run in PARALLEL)
 
@@ -59,6 +88,12 @@ The agent must classify each learning and route to the correct destination:
    - Build/deploy configurations
    - Project-specific hooks and utilities
 
+**Session Archive Rule:**
+
+The learning-extractor will enforce a 3-session limit on project SKILL.md files:
+- If 3+ `## Session Learnings -` sections exist, the oldest is moved to `SKILL_ARCHIVE.md`
+- Only the 3 most recent sessions are kept in the active file
+
 ### 1b. Doc Updator (Parallel with 1a)
 
 Use the Task tool with `subagent_type: doc-updator` to suggest and apply updates to:
@@ -70,9 +105,11 @@ The agent will edit `CLAUDE.md` directly.
 
 **IMPORTANT:** Run 1a and 1b in parallel by including both Task tool calls in a single message.
 
-## Phase 2: Review (After Phase 1 completes)
+---
 
-### 2. Followup Suggestor
+## Phase 2: Review & Persist (After Phase 1 completes)
+
+### 2a. Followup Suggestor
 
 Use the Task tool with `subagent_type: followup-suggestor` to identify:
 - Incomplete work items from this session
@@ -80,13 +117,32 @@ Use the Task tool with `subagent_type: followup-suggestor` to identify:
 - Testing gaps
 - Prioritized list for next session
 
-Print the followup items to console (don't persist).
+The agent will:
+- Write followups to `.claude/session-state/followups.md` (creating the directory if needed)
+- Print followups to console
+- Include complexity estimates (`simple`/`medium`/`complex`) for each item
+
+### 2b. Automation Opportunity Triage
+
+The followup-suggestor also handles automation triage:
+- Reads `.claude/session-state/automation-log.md` if it exists
+- Compares current session's automation opportunities against history
+- Flags items appearing in 3+ sessions as `RECURRING`
+- Appends current session's opportunities to `automation-log.md`
+- Prints triage summary to console
+
+---
 
 ## Phase 3: Consolidation (Run last)
 
-### 3. Doc Consolidator (Includes duplicate detection)
+### 3a. Doc Consolidator (Includes duplicate detection)
 
 Use the Task tool with `subagent_type: doc-consolidator` to:
+
+**Step 0 - Conflict marker resolution (FIRST):**
+- Scan all target files for `<<<<<<<`, `=======`, `>>>>>>>`
+- Resolve by removing markers, keeping both content sections
+- Must complete before other consolidation work
 
 **Step 1 - Detect duplicates:**
 - Check CLAUDE.md for internal duplicates
@@ -99,6 +155,7 @@ Use the Task tool with `subagent_type: doc-consolidator` to:
 - Remove redundant copies and add cross-references
 - Resolve contradictions by updating outdated information
 - Ensure proper file ownership hierarchy
+- Migrate any `(lines X-Y)` references to section heading references
 
 **Canonical File Hierarchy:**
 
@@ -109,6 +166,27 @@ Use the Task tool with `subagent_type: doc-consolidator` to:
 | `.claude/CLAUDE.md` | Project architecture, design system | Agent-specific learnings |
 
 The agent will edit files directly to consolidate documentation.
+
+### 3b. Post-edit Validation
+
+After the doc-consolidator finishes, verify the edits are clean:
+
+1. **Re-check for conflict markers** introduced by edits:
+   ```bash
+   grep -rn '<<<<<<\|======\|>>>>>>' .claude/ ~/.claude/skills/ --include='*.md' || echo "No conflicts found"
+   ```
+
+2. **Check for unclosed code blocks** (odd count of ``` lines):
+   ```bash
+   for f in .claude/CLAUDE.md .claude/agents/*/SKILL.md ~/.claude/skills/*/SKILL.md; do
+     [ -f "$f" ] && count=$(grep -c '```' "$f") && [ $((count % 2)) -ne 0 ] && echo "UNCLOSED CODE BLOCK: $f (${count} backtick lines)"
+   done
+   echo "Code block check complete"
+   ```
+
+3. **Report and fix** any issues found before proceeding.
+
+---
 
 ## Phase 4: Commit Global Skills (After Phase 3 completes)
 
@@ -127,7 +205,7 @@ Run the following steps using the Bash tool:
    ```bash
    cd ~/projects/nordic_claude_agent_skills && git add -A && git commit -m "docs: update skills from session wrap-up
 
-   Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push
+   Co-Authored-By: Claude Code <noreply@anthropic.com>" && git push
    ```
 
 3. **Report the result** in the final summary:
@@ -139,15 +217,21 @@ Run the following steps using the Bash tool:
 - `~/.claude/agents/` → `nordic_claude_agent_skills/agents/`
 - `~/.claude/commands/` → `nordic_claude_agent_skills/commands/`
 
+---
+
 ## Final Summary
 
-After all phases complete, provide a brief summary:
-- Key learnings captured (with destination: global vs project)
-- Automation opportunities identified
-- Documentation updates made
-- Priority items for next session
-- Duplicates found and consolidation actions taken
-- Global skills commit status (committed/no changes)
+After all phases complete, provide a brief summary covering:
+
+- **Pre-flight results:** Conflicts found/resolved, baseline file sizes
+- **Key learnings captured** (with destination: global vs project)
+- **Session archive actions** (any sessions moved to SKILL_ARCHIVE.md)
+- **Documentation updates made**
+- **Followup items persisted** to `.claude/session-state/followups.md`
+- **Automation triage:** New opportunities, recurring items (3+ sessions)
+- **Post-edit validation results** (conflicts, code blocks, reference checks)
+- **File size deltas** (compare against Phase 0 baselines)
+- **Global skills commit status** (committed/no changes)
 
 ---
 
@@ -157,13 +241,19 @@ This workflow has been optimized from the original 6-agent sequential flow:
 
 | Aspect | Before | After |
 |--------|--------|-------|
-| Agents | 6 sequential | 4 (2 parallel + 2 sequential) + git commit |
-| Est. Time | ~3-4 min | ~2-2.5 min |
-| File conflicts | Possible | Minimized |
+| Agents | 6 sequential | 4 (2 parallel + 2 sequential) + validation + git commit |
+| Validation | None | Pre-flight + post-edit checks |
+| Followups | Console only (lost) | Persisted to `.claude/session-state/` |
+| SKILL.md growth | Unbounded | 3-session cap with archive |
+| Conflict markers | Ignored | Detected and resolved |
+| Line references | Fragile `(lines X-Y)` | Section heading references |
+| Co-author tag | Model-specific | `Claude Code` (future-proof) |
 
-**Changes:**
-- Merged learning-extractor + automation-scout (both update SKILL.md)
-- Merged duplicate-checker + doc-consolidator (related tasks)
-- Phase 1 runs in parallel for faster execution
-- Added dual-destination routing for global vs project learnings
-- Phase 4 auto-commits global skills changes to nordic_claude_agent_skills repo
+**Session State Convention:**
+
+```
+.claude/session-state/
+  followups.md        # Latest session followups (overwritten each /wrap-session)
+  checkpoint.md       # Latest checkpoint (overwritten each /checkpoint)
+  automation-log.md   # Cumulative automation suggestions (appended each session)
+```
