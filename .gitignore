@@ -1,0 +1,3 @@
+.DS_Store
+# Anthropic-synced built-in skills land here via the ~/.claude/skills symlink
+skills/synced/

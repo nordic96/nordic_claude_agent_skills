@@ -137,7 +137,7 @@ git push -u origin {branchName}
 
 **Extract issue number from branch:**
 ```bash
-# If branch is "issue_#123" or "issue_123", extract "123"
+# Handles "issue_123", "issue_#123", "issue-123", "feature_123" — extract trailing number
 echo "{branchName}" | grep -oE '[0-9]+$'
 ```
 
@@ -190,6 +190,42 @@ Closes #{issueNumber}
 - `Fixes #123`
 - `Resolves #123`
 
+### Step 5b: Verify & Ensure the Issue Is Linked
+
+**Critical caveat:** GitHub only auto-closes an issue from a `Closes #X` keyword when the PR
+merges into the repository's **default branch** (usually `main`). When the PR targets a
+non-default base (e.g. `develop`), the keyword often does **not** populate the PR's
+**Development** panel, so the issue ends up unlinked and won't auto-close on merge.
+
+After creating the PR, always verify the link and add a fallback cross-reference if it's
+missing, so the issue and PR are connected in both timelines:
+
+```bash
+PR_NUMBER=$(gh pr view {branchName} --json number -q .number)
+OWNER_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+OWNER=${OWNER_REPO%/*}; REPO=${OWNER_REPO#*/}
+
+LINKED=$(gh api graphql -f query='
+  query($owner:String!,$repo:String!,$pr:Int!){
+    repository(owner:$owner,name:$repo){
+      pullRequest(number:$pr){ closingIssuesReferences(first:10){ nodes{ number } } }
+    }
+  }' -F owner="$OWNER" -F repo="$REPO" -F pr="$PR_NUMBER" \
+  -q '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' 2>/dev/null)
+
+if echo "$LINKED" | grep -qx "{issueNumber}"; then
+  echo "Issue #{issueNumber} is formally linked to PR #$PR_NUMBER."
+else
+  # Fallback when base branch is non-default: cross-reference both ways and label the PR
+  gh issue comment {issueNumber} --body "Addressed by PR #$PR_NUMBER."
+  echo "WARNING: closing-keyword link not registered (non-default base branch)."
+  echo "Added a cross-reference comment; link manually via the PR's Development panel if you need auto-close."
+fi
+```
+
+Report in the final output whether the issue is **formally linked** or only
+**cross-referenced** (non-default base branch), so the user knows if auto-close on merge will work.
+
 ### Step 6: Output
 
 **Success (Full Validation):**
@@ -235,3 +271,7 @@ Fix the issues and run `/run-pr-checks {branchName}` again
 - Detects base branch automatically (develop or main), or use `--base` argument
 - **ALWAYS links issue** when branch name contains issue number (e.g., `issue_#439`)
 - Uses `Closes #X` keyword in PR body to auto-close linked issues on merge
+- **Verifies the link after creating the PR** (Step 5b) via `closingIssuesReferences`; the
+  `Closes #X` keyword only links/auto-closes against the **default branch**, so for PRs
+  targeting `develop` (or any non-default base) it adds a cross-reference comment as a
+  fallback and reports whether the issue is formally linked vs only cross-referenced
